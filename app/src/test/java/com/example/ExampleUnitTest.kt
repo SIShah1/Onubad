@@ -144,4 +144,107 @@ class ExampleUnitTest {
       )
     assertTrue(invalidResult is GeminiCallResult.InvalidKey)
   }
+
+  @Test
+  fun `srt parser splits raw srt into items with index timestamp and content`() {
+    val raw =
+      "\uFEFF1\r\n00:00:01,200 --> 00:00:03,800\r\nFirst line\r\nSecond line\r\n\r\n2\r\n00:00:04,500 --> 00:00:06,000\r\nSingle line"
+    val items = com.example.srt.SrtParser.parse(raw)
+
+    assertEquals(2, items.size)
+    assertEquals(1, items[0].index)
+    assertEquals("00:00:01,200 --> 00:00:03,800", items[0].timestamp)
+    assertEquals("First line\nSecond line", items[0].content)
+    assertEquals(2, items[1].index)
+    assertEquals("00:00:04,500 --> 00:00:06,000", items[1].timestamp)
+    assertEquals("Single line", items[1].content)
+  }
+
+  @Test
+  fun `gemini client delegates to retrofit GeminiApiService with dynamic key and model`() =
+    kotlinx.coroutines.runBlocking {
+      val capturedKeys = mutableListOf<String>()
+      val capturedModels = mutableListOf<String>()
+
+      val fakeService =
+        object : com.example.data.network.GeminiApiService {
+          override suspend fun generateContent(
+            model: String,
+            apiKey: String,
+            request: com.example.data.network.GeminiGenerateContentRequest,
+          ): retrofit2.Response<com.example.data.network.GeminiGenerateContentResponse> {
+            capturedModels.add(model)
+            capturedKeys.add(apiKey)
+            return if (apiKey == "key-exhausted") {
+              retrofit2.Response.error(
+                429,
+                okhttp3.ResponseBody.create(
+                  null,
+                  """{"error":{"status":"RESOURCE_EXHAUSTED","message":"Daily quota exceeded"}}""",
+                ),
+              )
+            } else {
+              retrofit2.Response.success(
+                com.example.data.network.GeminiGenerateContentResponse(
+                  candidates =
+                    listOf(
+                      com.example.data.network.GeminiCandidate(
+                        content =
+                          com.example.data.network.GeminiContent(
+                            role = "model",
+                            parts =
+                              listOf(
+                                com.example.data.network.GeminiPart(text = "internal thought", thought = true),
+                                com.example.data.network.GeminiPart(text = "1\n00:00:01,000 --> 00:00:02,000\nহ্যালো"),
+                              ),
+                          )
+                      )
+                    )
+                )
+              )
+            }
+          }
+        }
+
+      val client = GeminiApiClient(customService = fakeService)
+
+      val r1 =
+        client.translateBatch(
+          apiKey = "key-exhausted",
+          model = "gemini-3.8-flash",
+          temperature = 0.3f,
+          thinkingBudget = 8192,
+          systemPrompt = "Translate",
+          fewShotExamples = emptyList(),
+          inputMode = com.example.domain.model.InputMode.MOVIE,
+          title = "Test",
+          secondaryMeta = "2026",
+          batchSrtPayload = "1\n00:00:01,000 --> 00:00:02,000\nHello",
+          batchIndex = 1,
+          totalBatches = 1,
+          fileName = "test.srt",
+        )
+      assertTrue(r1 is GeminiCallResult.QuotaExhausted)
+
+      val r2 =
+        client.translateBatch(
+          apiKey = "key-active-2",
+          model = "gemini-3.8-flash",
+          temperature = 0.3f,
+          thinkingBudget = 8192,
+          systemPrompt = "Translate",
+          fewShotExamples = emptyList(),
+          inputMode = com.example.domain.model.InputMode.MOVIE,
+          title = "Test",
+          secondaryMeta = "2026",
+          batchSrtPayload = "1\n00:00:01,000 --> 00:00:02,000\nHello",
+          batchIndex = 1,
+          totalBatches = 1,
+          fileName = "test.srt",
+        )
+      assertTrue(r2 is GeminiCallResult.Success)
+      assertEquals("1\n00:00:01,000 --> 00:00:02,000\nহ্যালো", (r2 as GeminiCallResult.Success).translatedText)
+      assertEquals(listOf("key-exhausted", "key-active-2"), capturedKeys)
+      assertEquals(listOf("gemini-3.8-flash", "gemini-3.8-flash"), capturedModels)
+    }
 }

@@ -1,16 +1,16 @@
 package com.example.service
 
 import com.example.data.local.HistoryRepository
+import com.example.data.local.SubtitleTranslationRepository
 import com.example.data.local.TranslationHistoryEntity
+import com.example.data.network.ApiKeyRotationManager
+import com.example.data.network.BatchValidationOutcome
 import com.example.data.network.GeminiApiClient
-import com.example.data.network.GeminiCallResult
+import com.example.data.network.RotationExecutionResult
 import com.example.data.preferences.SecureKeyStorage
 import com.example.data.preferences.SettingsRepository
 import com.example.data.storage.SubtitleFileStorage
-import com.example.domain.model.ApiKeyEntry
-import com.example.domain.model.ApiKeyStatus
 import com.example.domain.model.AppSettings
-import com.example.domain.model.DefaultConfig
 import com.example.domain.model.InputMode
 import com.example.domain.model.LogLevel
 import com.example.domain.model.ProcessingLogEntry
@@ -19,6 +19,7 @@ import com.example.domain.model.SrtBlock
 import com.example.domain.model.TranslationJobRequest
 import com.example.domain.model.TranslationSessionState
 import com.example.domain.model.TranslationStatus
+import com.example.logging.TranslationLogger
 import com.example.srt.SrtEngine
 import com.example.srt.ValidationResult
 import java.text.SimpleDateFormat
@@ -28,6 +29,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -35,14 +37,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class TranslationCoordinator(
   private val settingsRepository: SettingsRepository,
   private val keyStorage: SecureKeyStorage,
   private val historyRepository: HistoryRepository,
+  private val subtitleTranslationRepository: SubtitleTranslationRepository,
   private val fileStorage: SubtitleFileStorage,
   private val geminiApiClient: GeminiApiClient,
+  private val keyRotationManager: ApiKeyRotationManager =
+    ApiKeyRotationManager(keyStorage = keyStorage, geminiApiClient = geminiApiClient),
 ) {
 
   private val _sessionState = MutableStateFlow(TranslationSessionState())
@@ -65,6 +72,84 @@ class TranslationCoordinator(
       } else {
         TranslationSessionState()
       }
+    }
+  }
+
+  fun markQueued(request: TranslationJobRequest) {
+    pendingJobRequest = request
+    val totalFiles = request.files.size
+    val totalBlocks = request.files.sumOf { it.totalBlocks }
+    _sessionState.value =
+      TranslationSessionState(
+        status = TranslationStatus.RUNNING,
+        totalFiles = totalFiles,
+        completedFiles = 0,
+        currentFileIndex = if (totalFiles > 0) 1 else 0,
+        currentFileName = request.files.firstOrNull()?.fileName.orEmpty(),
+        totalBlocksAllFiles = totalBlocks,
+        completedBlocksAllFiles = 0,
+        activePhaseMessage = "Queued in background...",
+        logs =
+          listOf(
+            ProcessingLogEntry(
+              id = logIdGen.getAndIncrement(),
+              timestampLabel = timeFormatter.format(Date()),
+              message = "Scheduled background WorkManager translation ($totalFiles file(s), $totalBlocks blocks)",
+              level = LogLevel.INFO,
+            )
+          ),
+      )
+  }
+
+  suspend fun executeJobFromWorker(
+    request: TranslationJobRequest,
+    workId: String? = null,
+  ): Boolean {
+    if (request.files.isEmpty()) {
+      appendLog("No subtitle files queued for translation.", LogLevel.ERROR)
+      TranslationLogger.logWorkerError(
+        workId = workId,
+        message = "No subtitle files queued for translation.",
+      )
+      _sessionState.update {
+        it.copy(status = TranslationStatus.FAILED, activePhaseMessage = "No subtitle files selected")
+      }
+      return false
+    }
+
+    activeJob = currentCoroutineContext()[Job]
+    return try {
+      executeTranslationJob(request, workId = workId)
+      _sessionState.value.status == TranslationStatus.COMPLETED
+    } catch (cancel: CancellationException) {
+      handleCancellationCleanup()
+      if (workId != null) {
+        TranslationLogger.logWorkerCancelled(
+          workId = workId,
+          reason = cancel.message ?: "WorkManager execution cancelled",
+        )
+      }
+      if (!currentCoroutineContext().isActive) {
+        throw cancel
+      }
+      false
+    } catch (e: Exception) {
+      val msg = e.message ?: "Unexpected error"
+      appendLog("Translation failed: $msg", LogLevel.ERROR)
+      TranslationLogger.logWorkerError(
+        workId = workId,
+        message = "Translation coordinator failed: $msg",
+        throwable = e,
+      )
+      _sessionState.update {
+        it.copy(
+          status = TranslationStatus.FAILED,
+          activePhaseMessage = "Failed: ${e.message ?: "Error"}",
+        )
+      }
+      false
+    } finally {
+      activeJob = null
     }
   }
 
@@ -129,13 +214,20 @@ class TranslationCoordinator(
     }
   }
 
-  private suspend fun executeTranslationJob(request: TranslationJobRequest) {
+  private suspend fun executeTranslationJob(
+    request: TranslationJobRequest,
+    workId: String? = null,
+  ) {
     val settings = settingsRepository.getSettingsSnapshot()
-    keyStorage.resetExhaustedAndCooldownKeys()
-    val allKeys = keyStorage.getKeysSnapshot()
+    val rotationSession = keyRotationManager.prepareSession()
+    val allKeys = rotationSession.keys
 
     if (allKeys.isEmpty()) {
       appendLog("No Gemini API keys configured. Add keys in API Key Manager.", LogLevel.ERROR)
+      TranslationLogger.logWorkerError(
+        workId = workId,
+        message = "No Gemini API keys configured. Add keys in API Key Manager.",
+      )
       _sessionState.update {
         it.copy(
           status = TranslationStatus.FAILED,
@@ -148,6 +240,7 @@ class TranslationCoordinator(
     val totalFiles = request.files.size
     val totalBlocksAllFiles = request.files.sumOf { it.totalBlocks }
     var completedBlocksAllFiles = 0
+    val initialKeyIdx = rotationSession.currentIndex
 
     _sessionState.value =
       TranslationSessionState(
@@ -158,8 +251,8 @@ class TranslationCoordinator(
         currentFileName = request.files.first().fileName,
         totalBlocksAllFiles = totalBlocksAllFiles,
         completedBlocksAllFiles = 0,
-        currentKeyNumber = 1,
-        currentKeyLabel = allKeys.first().label,
+        currentKeyNumber = initialKeyIdx + 1,
+        currentKeyLabel = allKeys[initialKeyIdx].label,
         currentAttempt = 1,
         maxAttempts = settings.effectiveMaxAttemptsPerKey,
         activePhaseMessage = "Starting translation...",
@@ -170,18 +263,6 @@ class TranslationCoordinator(
       "Started ${request.inputMode.name.lowercase()} job: $totalFiles file(s), $totalBlocksAllFiles blocks (${settings.effectiveModel})",
       LogLevel.INFO,
     )
-
-    // Key rotation state preserved across batches and files in this session
-    var currentKeyIndex = 0
-    val temporarilyExhaustedIndices = HashSet<Int>()
-    val permanentlyInvalidIndices =
-      allKeys.indices.filter { allKeys[it].status == ApiKeyStatus.INVALID }.toMutableSet()
-
-    if (permanentlyInvalidIndices.size == allKeys.size) {
-      // Reset invalid statuses once if user is retrying with edited/re-enabled keys
-      keyStorage.resetAllKeyStatuses()
-      permanentlyInvalidIndices.clear()
-    }
 
     for ((fileIdx, file) in request.files.withIndex()) {
       currentCoroutineContext().ensureActive()
@@ -210,6 +291,19 @@ class TranslationCoordinator(
         continue
       }
 
+      val preSeededId = request.preSeededJobIds[file.id]
+      val fileJobId = preSeededId ?: "${System.currentTimeMillis()}_${file.id}"
+      if (preSeededId == null) {
+        if (fileIdx == 0) {
+          subtitleTranslationRepository.clearAll()
+        }
+        subtitleTranslationRepository.seedPendingBlocks(
+          jobId = fileJobId,
+          fileName = file.fileName,
+          blocks = file.blocks,
+        )
+      }
+
       val translatedFileBlocks = ArrayList<SrtBlock>(file.blocks.size)
 
       try {
@@ -225,43 +319,81 @@ class TranslationCoordinator(
           appendLog("Batch $displayBatchNum/$totalBatches – Processing", LogLevel.INFO)
 
           val rotationResult =
-            translateBatchWithRotation(
-              batchBlocks = batchBlocks,
-              batchNum = displayBatchNum,
+            keyRotationManager.executeBatchWithRotation(
+              session = rotationSession,
+              model = settings.effectiveModel,
+              temperature = settings.effectiveTemperature,
+              thinkingBudget = settings.effectiveThinkingBudget,
+              systemPrompt = settings.effectivePrompt,
+              fewShotExamples = settings.fewShotExamples,
+              inputMode = request.inputMode,
+              title = request.title,
+              secondaryMeta = request.secondaryMeta,
+              batchSrtPayload = SrtEngine.formatBlocks(batchBlocks),
+              batchIndex = displayBatchNum,
               totalBatches = totalBatches,
-              fileNum = displayFileNum,
-              totalFiles = totalFiles,
               fileName = file.fileName,
-              request = request,
-              settings = settings,
-              allKeys = allKeys,
-              startingKeyIndex = currentKeyIndex,
-              exhaustedIndices = temporarilyExhaustedIndices,
-              invalidIndices = permanentlyInvalidIndices,
+              maxAttemptsPerKey = settings.effectiveMaxAttemptsPerKey,
+              retryIntervalSeconds = settings.effectiveRetryIntervalSeconds,
+              cooldownMinutes = settings.effectiveCooldownMinutes,
+              workId = workId,
+              validateOutput = { rawText ->
+                val parsedOutput = SrtEngine.parseModelOutput(rawText)
+                when (val validation = SrtEngine.validateBatch(batchBlocks, parsedOutput)) {
+                  is ValidationResult.Valid -> BatchValidationOutcome.Valid(validation.blocks)
+                  is ValidationResult.Invalid -> BatchValidationOutcome.Invalid(validation.reason)
+                }
+              },
+              onAttemptStarted = { keyNum, keyLabel, attempt, maxAttempts ->
+                _sessionState.update {
+                  it.copy(
+                    status = TranslationStatus.RUNNING,
+                    currentKeyNumber = keyNum,
+                    currentKeyLabel = keyLabel,
+                    currentAttempt = attempt,
+                    maxAttempts = maxAttempts,
+                    cooldownRemainingSeconds = 0,
+                    activePhaseMessage =
+                      "File $displayFileNum/$totalFiles • Batch $displayBatchNum/$totalBatches",
+                  )
+                }
+              },
+              onStatusLog = { message, level -> appendLog(message, level) },
+              onRetryDelay = { seconds, prefix -> delayCancellableSeconds(seconds, prefix) },
+              onCooldownWait = { minutes -> runCooldownTimer(minutes) },
             )
 
-          currentKeyIndex = rotationResult.nextKeyIndex
-
-          if (rotationResult.fatalError != null) {
-            // Preserve any validated batches completed so far for this file
-            savePartialIfNeeded(
-              file = file,
-              translatedBlocks = translatedFileBlocks,
-              request = request,
-              settings = settings,
-            )
-            appendLog(rotationResult.fatalError, LogLevel.ERROR)
-            _sessionState.update {
-              it.copy(
-                status = TranslationStatus.FAILED,
-                activePhaseMessage = rotationResult.fatalError,
-              )
+          val validatedBlocks =
+            when (rotationResult) {
+              is RotationExecutionResult.Success -> rotationResult.value
+              is RotationExecutionResult.Failure -> {
+                // Preserve any validated batches completed so far for this file
+                savePartialIfNeeded(
+                  file = file,
+                  translatedBlocks = translatedFileBlocks,
+                  request = request,
+                  settings = settings,
+                )
+                appendLog(rotationResult.fatalError, LogLevel.ERROR)
+                TranslationLogger.logWorkerError(
+                  workId = workId,
+                  message =
+                    "${file.fileName} batch $displayBatchNum/$totalBatches aborted: ${rotationResult.fatalError}",
+                )
+                _sessionState.update {
+                  it.copy(
+                    status = TranslationStatus.FAILED,
+                    activePhaseMessage = rotationResult.fatalError,
+                  )
+                }
+                return
+              }
             }
-            return
-          }
-
-          val validatedBlocks = rotationResult.validatedBlocks!!
           translatedFileBlocks.addAll(validatedBlocks)
+          subtitleTranslationRepository.markBatchTranslated(
+            jobId = fileJobId,
+            translatedBlocks = validatedBlocks,
+          )
           completedBlocksAllFiles += validatedBlocks.size
 
           appendLog("Batch $displayBatchNum/$totalBatches – Completed", LogLevel.SUCCESS)
@@ -337,224 +469,40 @@ class TranslationCoordinator(
     settings: AppSettings,
   ) {
     if (translatedBlocks.isEmpty()) return
-    runCatching {
-      val formattedSrt = SrtEngine.formatBlocks(translatedBlocks)
-      val baseOutputName = SrtEngine.buildOutputFileName(file.fileName, settings)
-      val partialName =
-        if (baseOutputName.endsWith(".srt", ignoreCase = true)) {
-          baseOutputName.dropLast(4) + "_partial.srt"
-        } else {
-          baseOutputName + "_partial.srt"
-        }
-      val savedOutput = fileStorage.saveTranslatedSrt(partialName, formattedSrt)
-      historyRepository.saveRecord(
-        TranslationHistoryEntity(
-          originalFileName = file.fileName,
-          outputFileName = savedOutput.outputFileName,
-          savedPath = savedOutput.displayPath,
-          contentUri = savedOutput.contentUri,
-          localBackupPath = savedOutput.localBackupPath,
-          mode = request.inputMode.name,
-          titleMetadata = buildTitleMetadata(request),
-          totalBlocks = file.totalBlocks,
-          translatedBlocks = translatedBlocks.size,
-          totalLines = file.totalLines,
-          fileSizeBytes = savedOutput.fileSizeBytes,
-          modelUsed = settings.effectiveModel,
-          status = "Partial (${translatedBlocks.size}/${file.totalBlocks})",
+    withContext(NonCancellable) {
+      runCatching {
+        val formattedSrt = SrtEngine.formatBlocks(translatedBlocks)
+        val baseOutputName = SrtEngine.buildOutputFileName(file.fileName, settings)
+        val partialName =
+          if (baseOutputName.endsWith(".srt", ignoreCase = true)) {
+            baseOutputName.dropLast(4) + "_partial.srt"
+          } else {
+            baseOutputName + "_partial.srt"
+          }
+        val savedOutput = fileStorage.saveTranslatedSrt(partialName, formattedSrt)
+        historyRepository.saveRecord(
+          TranslationHistoryEntity(
+            originalFileName = file.fileName,
+            outputFileName = savedOutput.outputFileName,
+            savedPath = savedOutput.displayPath,
+            contentUri = savedOutput.contentUri,
+            localBackupPath = savedOutput.localBackupPath,
+            mode = request.inputMode.name,
+            titleMetadata = buildTitleMetadata(request),
+            totalBlocks = file.totalBlocks,
+            translatedBlocks = translatedBlocks.size,
+            totalLines = file.totalLines,
+            fileSizeBytes = savedOutput.fileSizeBytes,
+            modelUsed = settings.effectiveModel,
+            status = "Partial (${translatedBlocks.size}/${file.totalBlocks})",
+          )
         )
-      )
-      appendLog(
-        "Preserved ${translatedBlocks.size} validated blocks in ${savedOutput.outputFileName}",
-        LogLevel.INFO,
-      )
-    }
-  }
-
-  private data class BatchRotationOutcome(
-    val validatedBlocks: List<SrtBlock>? = null,
-    val nextKeyIndex: Int,
-    val fatalError: String? = null,
-  )
-
-  private suspend fun translateBatchWithRotation(
-    batchBlocks: List<SrtBlock>,
-    batchNum: Int,
-    totalBatches: Int,
-    fileNum: Int,
-    totalFiles: Int,
-    fileName: String,
-    request: TranslationJobRequest,
-    settings: AppSettings,
-    allKeys: List<ApiKeyEntry>,
-    startingKeyIndex: Int,
-    exhaustedIndices: MutableSet<Int>,
-    invalidIndices: MutableSet<Int>,
-  ): BatchRotationOutcome {
-    val batchPayload = SrtEngine.formatBlocks(batchBlocks)
-    val maxAttempts = settings.effectiveMaxAttemptsPerKey
-    val retryIntervalSec = settings.effectiveRetryIntervalSeconds
-    val cooldownMinutes = settings.effectiveCooldownMinutes
-
-    var keyIdx = startingKeyIndex
-
-    while (true) {
-      currentCoroutineContext().ensureActive()
-
-      if (invalidIndices.size >= allKeys.size) {
-        return BatchRotationOutcome(
-          nextKeyIndex = 0,
-          fatalError = "All configured API keys are invalid. Please update your keys.",
+        appendLog(
+          "Preserved ${translatedBlocks.size} validated blocks in ${savedOutput.outputFileName}",
+          LogLevel.INFO,
         )
       }
-
-      // Find next available key that is neither exhausted nor invalid
-      val candidateIdx = findNextAvailableKeyIndex(allKeys.size, keyIdx, exhaustedIndices, invalidIndices)
-      if (candidateIdx == null) {
-        // All non-invalid keys are exhausted -> Enter 30-minute (or configured) cooldown
-        runCooldownTimer(cooldownMinutes)
-        exhaustedIndices.clear()
-        keyStorage.resetExhaustedAndCooldownKeys()
-        keyIdx = findNextAvailableKeyIndex(allKeys.size, 0, exhaustedIndices, invalidIndices) ?: 0
-        appendLog("Cooldown ended – Resuming from Key #${keyIdx + 1}", LogLevel.INFO)
-        continue
-      }
-
-      keyIdx = candidateIdx
-      val activeKey = allKeys[keyIdx]
-      val keyNum = keyIdx + 1
-
-      var attempt = 1
-      var switchToNextKey = false
-
-      while (attempt <= maxAttempts && !switchToNextKey) {
-        currentCoroutineContext().ensureActive()
-
-        _sessionState.update {
-          it.copy(
-            status = TranslationStatus.RUNNING,
-            currentKeyNumber = keyNum,
-            currentKeyLabel = activeKey.label,
-            currentAttempt = attempt,
-            maxAttempts = maxAttempts,
-            cooldownRemainingSeconds = 0,
-            activePhaseMessage = "File $fileNum/$totalFiles • Batch $batchNum/$totalBatches",
-          )
-        }
-
-        val apiResult =
-          geminiApiClient.translateBatch(
-            apiKey = activeKey.key,
-            model = settings.effectiveModel,
-            temperature = settings.effectiveTemperature,
-            thinkingBudget = settings.effectiveThinkingBudget,
-            systemPrompt = settings.effectivePrompt,
-            fewShotExamples = settings.fewShotExamples,
-            inputMode = request.inputMode,
-            title = request.title,
-            secondaryMeta = request.secondaryMeta,
-            batchSrtPayload = batchPayload,
-            batchIndex = batchNum,
-            totalBatches = totalBatches,
-            fileName = fileName,
-          )
-
-        when (apiResult) {
-          is GeminiCallResult.Success -> {
-            val parsedOutput = SrtEngine.parseModelOutput(apiResult.translatedText)
-            when (val validation = SrtEngine.validateBatch(batchBlocks, parsedOutput)) {
-              is ValidationResult.Valid -> {
-                return BatchRotationOutcome(
-                  validatedBlocks = validation.blocks,
-                  nextKeyIndex = keyIdx,
-                )
-              }
-              is ValidationResult.Invalid -> {
-                appendLog(
-                  "Batch $batchNum/$totalBatches – Validation failed: ${validation.reason}",
-                  LogLevel.WARNING,
-                )
-                if (attempt < maxAttempts) {
-                  appendLog(
-                    "Retrying batch in ${retryIntervalSec}s (Attempt ${attempt + 1}/$maxAttempts)",
-                    LogLevel.INFO,
-                  )
-                  delayCancellableSeconds(retryIntervalSec, "Retrying batch in")
-                } else {
-                  appendLog(
-                    "Key #$keyNum – Validation failed $maxAttempts times, switching key",
-                    LogLevel.WARNING,
-                  )
-                  exhaustedIndices.add(keyIdx)
-                  switchToNextKey = true
-                }
-              }
-            }
-          }
-
-          is GeminiCallResult.QuotaExhausted -> {
-            appendLog("Key #$keyNum – Daily Limit Exceeded", LogLevel.ERROR)
-            keyStorage.updateKeyStatus(
-              activeKey.id,
-              ApiKeyStatus.QUOTA_EXHAUSTED,
-              apiResult.reason,
-            )
-            exhaustedIndices.add(keyIdx)
-            switchToNextKey = true
-          }
-
-          is GeminiCallResult.InvalidKey -> {
-            appendLog("Key #$keyNum – Invalid API Key", LogLevel.ERROR)
-            keyStorage.updateKeyStatus(activeKey.id, ApiKeyStatus.INVALID, apiResult.reason)
-            invalidIndices.add(keyIdx)
-            switchToNextKey = true
-          }
-
-          is GeminiCallResult.RetryableError -> {
-            val shortReason =
-              if (apiResult.reason.contains("Server busy", ignoreCase = true) ||
-                apiResult.httpCode == 503 ||
-                apiResult.httpCode == 500
-              ) {
-                "Server Busy"
-              } else {
-                apiResult.reason.take(64)
-              }
-            appendLog("Key #$keyNum – $shortReason", LogLevel.WARNING)
-            if (attempt < maxAttempts) {
-              appendLog("Retrying in ${retryIntervalSec}s", LogLevel.INFO)
-              delayCancellableSeconds(retryIntervalSec, "Retrying in")
-            } else {
-              appendLog(
-                "Key #$keyNum – Max attempts ($maxAttempts) reached, switching key",
-                LogLevel.WARNING,
-              )
-              exhaustedIndices.add(keyIdx)
-              switchToNextKey = true
-            }
-          }
-        }
-        attempt++
-      }
-
-      // Move to next key index on next iteration
-      keyIdx = (keyIdx + 1) % allKeys.size
     }
-  }
-
-  private fun findNextAvailableKeyIndex(
-    totalKeys: Int,
-    startIndex: Int,
-    exhaustedIndices: Set<Int>,
-    invalidIndices: Set<Int>,
-  ): Int? {
-    for (offset in 0 until totalKeys) {
-      val idx = (startIndex + offset) % totalKeys
-      if (idx !in exhaustedIndices && idx !in invalidIndices) {
-        return idx
-      }
-    }
-    return null
   }
 
   private suspend fun delayCancellableSeconds(seconds: Int, prefix: String) {

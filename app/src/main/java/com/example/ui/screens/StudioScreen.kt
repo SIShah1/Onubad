@@ -33,14 +33,19 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tv
@@ -80,6 +85,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.R
+import com.example.data.local.FileTranslationProgress
+import com.example.data.local.RoomTranslationProgress
 import com.example.domain.model.ApiKeyEntry
 import com.example.domain.model.ApiKeyStatus
 import com.example.domain.model.AppSettings
@@ -94,6 +101,7 @@ import com.example.ui.components.SectionTitleRow
 import com.example.ui.components.StatusPill
 import com.example.ui.components.StudioSectionCard
 import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.LocalThemeController
 import com.example.ui.viewmodel.StudioFormState
 import java.util.Locale
 import kotlin.math.ceil
@@ -104,6 +112,8 @@ fun StudioScreen(
   settings: AppSettings,
   apiKeys: List<ApiKeyEntry>,
   sessionState: TranslationSessionState,
+  roomProgress: RoomTranslationProgress = RoomTranslationProgress(),
+  fileProgressList: List<FileTranslationProgress> = emptyList(),
   onInputModeChange: (InputMode) -> Unit,
   onMovieNameChange: (String) -> Unit,
   onReleaseYearChange: (String) -> Unit,
@@ -412,9 +422,11 @@ fun StudioScreen(
       }
     }
 
-    // 6. Live Processing Status & Persistent Logs
+    // 6. Live Processing Status, Room DB Progress & Persistent Logs
     LiveProcessingSection(
       sessionState = sessionState,
+      roomProgress = roomProgress,
+      fileProgressList = fileProgressList,
       onClearLogs = onClearLogs,
     )
 
@@ -430,10 +442,11 @@ private fun StudioHeroBanner(
   activeKeysCount: Int,
   onNavigateToKeys: () -> Unit,
 ) {
-  val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+  val themeController = LocalThemeController.current
+  val isDark = themeController.isDarkTheme
 
   Surface(
-    modifier = Modifier.fillMaxWidth().height(132.dp),
+    modifier = Modifier.fillMaxWidth().height(136.dp),
     shape = MaterialTheme.shapes.large,
     color = MaterialTheme.colorScheme.surfaceContainerHigh,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -461,9 +474,9 @@ private fun StudioHeroBanner(
                     )
                   } else {
                     listOf(
-                      MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                      MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.86f),
-                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                      MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                      MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f),
+                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
                     )
                   }
               )
@@ -522,21 +535,53 @@ private fun StudioHeroBanner(
         }
 
         Row(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          StatusPill(
-            text = modelName,
-            containerColor =
-              MaterialTheme.colorScheme.secondaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-          )
-          StatusPill(
-            text = "$chunkSize blocks/batch",
-            containerColor =
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          )
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            StatusPill(
+              text = modelName,
+              containerColor =
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
+              contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            StatusPill(
+              text = "$chunkSize blocks/batch",
+              containerColor =
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
+              contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+          }
+
+          Surface(
+            onClick = themeController.onToggleLightDark,
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.testTag("hero_theme_toggle_chip"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                contentDescription = if (isDark) "Switch to Light Mode" else "Switch to Dark Mode",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp),
+              )
+              Spacer(modifier = Modifier.width(5.dp))
+              Text(
+                text = if (isDark) "Dark" else "Light",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+          }
         }
       }
     }
@@ -759,11 +804,16 @@ private fun FileQueueRow(
 @Composable
 private fun LiveProcessingSection(
   sessionState: TranslationSessionState,
+  roomProgress: RoomTranslationProgress,
+  fileProgressList: List<FileTranslationProgress>,
   onClearLogs: () -> Unit,
 ) {
+  val hasRoomData = roomProgress.totalBlocks > 0
+  val targetFraction =
+    if (hasRoomData) roomProgress.progressFraction else sessionState.overallProgressFraction
   val animatedProgress by
     animateFloatAsState(
-      targetValue = sessionState.overallProgressFraction,
+      targetValue = targetFraction,
       label = "translation_progress",
     )
   val percentInt = (animatedProgress * 100f).toInt().coerceIn(0, 100)
@@ -789,7 +839,12 @@ private fun LiveProcessingSection(
   ) {
     SectionTitleRow(
       title = "Processing Status & Logs",
-      subtitle = sessionState.activePhaseMessage,
+      subtitle =
+        if (sessionState.status == TranslationStatus.IDLE && hasRoomData) {
+          "Room DB synced: ${roomProgress.translatedBlocks}/${roomProgress.totalBlocks} blocks translated"
+        } else {
+          sessionState.activePhaseMessage
+        },
       icon = Icons.Rounded.Terminal,
       trailing = {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -814,7 +869,7 @@ private fun LiveProcessingSection(
                 TranslationStatus.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
               },
           )
-          if (sessionState.logs.isNotEmpty()) {
+          if (sessionState.logs.isNotEmpty() || (hasRoomData && !sessionState.isRunningOrCooldown)) {
             IconButton(
               onClick = onClearLogs,
               modifier = Modifier.minimumInteractiveComponentSize().testTag("clear_logs_button"),
@@ -832,34 +887,173 @@ private fun LiveProcessingSection(
 
     Spacer(modifier = Modifier.height(12.dp))
 
-    // Progress Bar + Percentage
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+    // Room-Backed SRT Progress Card
+    Surface(
+      modifier = Modifier.fillMaxWidth().testTag("room_progress_card"),
+      shape = RoundedCornerShape(12.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerLow,
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-      Text(
-        text =
-          if (sessionState.totalFiles > 0) {
-            "Files: ${sessionState.completedFiles}/${sessionState.totalFiles} completed"
-          } else {
-            "No active job"
-          },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Text(
-        text = "$percentInt%",
-        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-        color = MaterialTheme.colorScheme.primary,
-      )
-    }
+      Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = Icons.Rounded.Storage,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+              text =
+                if (hasRoomData) {
+                  "${roomProgress.translatedBlocks}/${roomProgress.totalBlocks} blocks processed"
+                } else if (sessionState.totalFiles > 0) {
+                  "Files: ${sessionState.completedFiles}/${sessionState.totalFiles} queued"
+                } else {
+                  "No active SRT translation job"
+                },
+              style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("room_progress_counts"),
+            )
+          }
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = "$percentInt%",
+            style =
+              MaterialTheme.typography.labelMedium.copy(
+                fontWeight = FontWeight.Bold,
+                fontFamily = JetBrainsMonoFamily,
+              ),
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.testTag("room_progress_percent"),
+          )
+        }
 
-    Spacer(modifier = Modifier.height(6.dp))
-    LinearProgressIndicator(
-      progress = { animatedProgress },
-      modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(50)),
-    )
+        Spacer(modifier = Modifier.height(8.dp))
+        LinearProgressIndicator(
+          progress = { animatedProgress },
+          modifier =
+            Modifier.fillMaxWidth()
+              .height(9.dp)
+              .clip(RoundedCornerShape(50))
+              .testTag("room_translation_progress_bar"),
+        )
+
+        if (hasRoomData) {
+          Spacer(modifier = Modifier.height(10.dp))
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Surface(
+              modifier = Modifier.testTag("room_translated_count_pill"),
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.tertiaryContainer,
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.CheckCircle,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                  modifier = Modifier.size(13.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                  text = "Translated: ${roomProgress.translatedBlocks}",
+                  style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                  color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+              }
+            }
+
+            Surface(
+              modifier = Modifier.testTag("room_pending_count_pill"),
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.Schedule,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                  modifier = Modifier.size(13.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                  text = "Pending: ${roomProgress.pendingBlocks}",
+                  style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+              }
+            }
+          }
+
+          if (fileProgressList.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(modifier = Modifier.height(8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              fileProgressList.forEach { fileProgress ->
+                val animatedFileProgress by
+                  animateFloatAsState(
+                    targetValue = fileProgress.progressFraction,
+                    label = "file_progress_${fileProgress.jobId}",
+                  )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    Text(
+                      text = fileProgress.fileName,
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.weight(1f),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                      text =
+                        "${fileProgress.translatedBlocks}/${fileProgress.totalBlocks} (${fileProgress.progressPercent}%)",
+                      style =
+                        MaterialTheme.typography.labelSmall.copy(
+                          fontFamily = JetBrainsMonoFamily,
+                        ),
+                      color = MaterialTheme.colorScheme.primary,
+                    )
+                  }
+                  Spacer(modifier = Modifier.height(4.dp))
+                  LinearProgressIndicator(
+                    progress = { animatedFileProgress },
+                    modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(50)),
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 
     if (sessionState.totalFiles > 0) {
       Spacer(modifier = Modifier.height(10.dp))

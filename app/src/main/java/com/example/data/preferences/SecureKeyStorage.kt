@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.domain.model.ApiKeyEntry
@@ -26,6 +27,7 @@ private val Context.secureKeysDataStore by preferencesDataStore(name = "bsub_sec
 class SecureKeyStorage(private val context: Context) {
 
   private val encryptedKeysPref = stringPreferencesKey("encrypted_api_keys_payload")
+  private val activeKeyIndexPref = intPreferencesKey("active_rotation_key_index")
 
   val apiKeysFlow: Flow<List<ApiKeyEntry>> =
     context.secureKeysDataStore.data.map { prefs ->
@@ -33,8 +35,23 @@ class SecureKeyStorage(private val context: Context) {
       decodeEncryptedPayload(payload)
     }
 
+  val activeKeyIndexFlow: Flow<Int> =
+    context.secureKeysDataStore.data.map { prefs ->
+      (prefs[activeKeyIndexPref] ?: 0).coerceAtLeast(0)
+    }
+
   suspend fun getKeysSnapshot(): List<ApiKeyEntry> {
     return apiKeysFlow.first()
+  }
+
+  suspend fun getActiveKeyIndex(): Int {
+    return activeKeyIndexFlow.first()
+  }
+
+  suspend fun setActiveKeyIndex(index: Int) {
+    context.secureKeysDataStore.edit { prefs ->
+      prefs[activeKeyIndexPref] = index.coerceAtLeast(0)
+    }
   }
 
   suspend fun addBulkKeys(rawInput: String): Int {
@@ -107,7 +124,10 @@ class SecureKeyStorage(private val context: Context) {
   }
 
   suspend fun clearAllKeys() {
-    updateKeys { emptyList() }
+    context.secureKeysDataStore.edit { prefs ->
+      prefs[encryptedKeysPref] = encodeEncryptedPayload(emptyList())
+      prefs[activeKeyIndexPref] = 0
+    }
   }
 
   suspend fun updateKeyStatus(id: String, status: ApiKeyStatus, lastError: String? = null) {
@@ -142,6 +162,12 @@ class SecureKeyStorage(private val context: Context) {
         prefs[encryptedKeysPref]?.let { decodeEncryptedPayload(it) } ?: emptyList()
       val updated = transform(current)
       prefs[encryptedKeysPref] = encodeEncryptedPayload(updated)
+      val currentIdx = prefs[activeKeyIndexPref] ?: 0
+      if (updated.isEmpty()) {
+        prefs[activeKeyIndexPref] = 0
+      } else if (currentIdx >= updated.size || currentIdx < 0) {
+        prefs[activeKeyIndexPref] = 0
+      }
     }
   }
 

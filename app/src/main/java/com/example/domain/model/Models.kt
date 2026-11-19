@@ -247,4 +247,5 @@ data class TranslationJobRequest(
   val title: String,
   val secondaryMeta: String, // Release Year for Movie, Season for Series
   val files: List<SelectedSubtitleFile>,
+  val preSeededJobIds: Map<String, String> = emptyMap(),
 )

@@ -72,6 +72,7 @@ import com.example.ui.components.ParamModeHeader
 import com.example.ui.components.SectionTitleRow
 import com.example.ui.components.StudioSectionCard
 import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.LocalThemeController
 import com.example.ui.viewmodel.MainViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -83,6 +84,15 @@ fun SettingsScreen(
 ) {
   var editingExample by remember { mutableStateOf<FewShotExample?>(null) }
   var showAddExampleDialog by remember { mutableStateOf(false) }
+  val themeController = LocalThemeController.current
+  val activeModeLabel =
+    when (themeController.themeMode) {
+      ThemeMode.DARK -> "Active: Dark Mode"
+      ThemeMode.LIGHT -> "Active: Light Mode"
+      ThemeMode.SYSTEM ->
+        if (themeController.isDarkTheme) "Active: Dark Mode (Following System)"
+        else "Active: Light Mode (Following System)"
+    }
 
   Column(
     modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -92,7 +102,7 @@ fun SettingsScreen(
     StudioSectionCard {
       SectionTitleRow(
         title = "Appearance & Theme",
-        subtitle = "Dark studio theme is active by default",
+        subtitle = activeModeLabel,
         icon = Icons.Rounded.Palette,
       )
 
@@ -100,8 +110,8 @@ fun SettingsScreen(
 
       SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
         SegmentedButton(
-          selected = settings.themeMode == ThemeMode.DARK,
-          onClick = { viewModel.setThemeMode(ThemeMode.DARK) },
+          selected = themeController.themeMode == ThemeMode.DARK,
+          onClick = { themeController.onSetThemeMode(ThemeMode.DARK) },
           shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
           icon = {
             Icon(
@@ -115,8 +125,8 @@ fun SettingsScreen(
           Text("Dark")
         }
         SegmentedButton(
-          selected = settings.themeMode == ThemeMode.LIGHT,
-          onClick = { viewModel.setThemeMode(ThemeMode.LIGHT) },
+          selected = themeController.themeMode == ThemeMode.LIGHT,
+          onClick = { themeController.onSetThemeMode(ThemeMode.LIGHT) },
           shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
           icon = {
             Icon(
@@ -130,8 +140,8 @@ fun SettingsScreen(
           Text("Light")
         }
         SegmentedButton(
-          selected = settings.themeMode == ThemeMode.SYSTEM,
-          onClick = { viewModel.setThemeMode(ThemeMode.SYSTEM) },
+          selected = themeController.themeMode == ThemeMode.SYSTEM,
+          onClick = { themeController.onSetThemeMode(ThemeMode.SYSTEM) },
           shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
           icon = {
             Icon(

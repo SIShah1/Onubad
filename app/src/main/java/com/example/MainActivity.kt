@@ -53,7 +53,7 @@ import com.example.ui.screens.FirstLaunchPromptDialog
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.StudioScreen
-import com.example.ui.theme.BSubTranslatorTheme
+import com.example.ui.theme.ThemeProvider
 import com.example.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.flow.collectLatest
 
@@ -102,7 +102,10 @@ class MainActivity : ComponentActivity() {
       val mainViewModel: MainViewModel = viewModel()
       val settings by mainViewModel.settings.collectAsStateWithLifecycle()
 
-      BSubTranslatorTheme(themeMode = settings.themeMode) {
+      ThemeProvider(
+        themeMode = settings.themeMode,
+        onThemeModeChange = mainViewModel::setThemeMode,
+      ) {
         BSubAppRoot(viewModel = mainViewModel)
       }
     }
@@ -115,6 +118,8 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
   val studioForm by viewModel.studioForm.collectAsStateWithLifecycle()
   val apiKeys by viewModel.apiKeys.collectAsStateWithLifecycle()
   val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
+  val roomProgress by viewModel.roomTranslationProgress.collectAsStateWithLifecycle()
+  val fileProgressList by viewModel.fileTranslationProgressList.collectAsStateWithLifecycle()
   val historyItems by viewModel.historyItems.collectAsStateWithLifecycle()
   val previewState by viewModel.previewState.collectAsStateWithLifecycle()
 
@@ -212,6 +217,8 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
                 settings = settings,
                 apiKeys = apiKeys,
                 sessionState = sessionState,
+                roomProgress = roomProgress,
+                fileProgressList = fileProgressList,
                 onInputModeChange = viewModel::setInputMode,
                 onMovieNameChange = viewModel::updateMovieName,
                 onReleaseYearChange = viewModel::updateReleaseYear,

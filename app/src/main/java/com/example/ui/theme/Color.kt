@@ -27,14 +27,16 @@ val TextPrimaryDark = Color(0xFFF8FAFC)
 val TextSecondaryDark = Color(0xFF94A3B8)
 
 // Light Studio Palette
-val LightCanvas = Color(0xFFF4F6FA)
+val LightCanvas = Color(0xFFEEF2F6)
 val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFE8EDF5)
-val LightOutline = Color(0xFFCBD5E1)
+val LightSurfaceLow = Color(0xFFF6F9FC)
+val LightSurfaceVariant = Color(0xFFE9EFF7)
+val LightOutline = Color(0xFF94A3B8)
+val LightOutlineVariant = Color(0xFFCBD5E1)
 
-val AmberLightPrimary = Color(0xFFD97706)
+val AmberLightPrimary = Color(0xFFB45309)
 val AmberLightContainer = Color(0xFFFEF3C7)
-val CyanLightSecondary = Color(0xFF0891B2)
+val CyanLightSecondary = Color(0xFF0E7490)
 val CyanLightContainer = Color(0xFFCFFAFE)
 
 val TextPrimaryLight = Color(0xFF0F172A)

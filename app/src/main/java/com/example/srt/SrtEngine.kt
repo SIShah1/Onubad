@@ -35,48 +35,7 @@ object SrtEngine {
     )
   }
 
-  fun parse(rawContent: String): List<SrtBlock> {
-    val normalized =
-      rawContent
-        .removePrefix("\uFEFF")
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-        .trim()
-
-    if (normalized.isEmpty()) return emptyList()
-
-    val rawChunks = normalized.split(Regex("""\n\s*\n+"""))
-    val blocks = ArrayList<SrtBlock>(rawChunks.size)
-
-    for (chunk in rawChunks) {
-      val lines = chunk.lines()
-      if (lines.isEmpty()) continue
-
-      // Find the timestamp line ("-->") to be resilient against blank/extra header lines
-      val timestampLineIdx = lines.indexOfFirst { it.contains("-->") }
-      if (timestampLineIdx <= 0) continue
-
-      val indexCandidate = lines[timestampLineIdx - 1].trim().removePrefix("\uFEFF")
-      val serial = indexCandidate.toIntOrNull() ?: continue
-      val timestamp = lines[timestampLineIdx].trim()
-      val textLines =
-        if (timestampLineIdx + 1 < lines.size) {
-          lines.subList(timestampLineIdx + 1, lines.size).map { it.trimEnd() }
-        } else {
-          emptyList()
-        }
-
-      blocks.add(
-        SrtBlock(
-          index = serial,
-          timestamp = timestamp,
-          lines = textLines,
-        )
-      )
-    }
-
-    return blocks
-  }
+  fun parse(rawContent: String): List<SrtBlock> = SrtParser.parseBlocks(rawContent)
 
   fun parseModelOutput(rawResponse: String): List<SrtBlock> {
     var cleaned = rawResponse.trim().removePrefix("\uFEFF")

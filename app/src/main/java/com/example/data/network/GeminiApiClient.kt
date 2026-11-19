@@ -2,23 +2,19 @@ package com.example.data.network
 
 import com.example.domain.model.FewShotExample
 import com.example.domain.model.InputMode
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.coroutines.resume
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
 
 sealed class GeminiCallResult {
   data class Success(val translatedText: String) : GeminiCallResult()
@@ -30,15 +26,28 @@ sealed class GeminiCallResult {
   data class InvalidKey(val reason: String) : GeminiCallResult()
 }
 
-class GeminiApiClient {
+class GeminiApiClient(
+  customService: GeminiApiService? = null,
+) {
 
-  private val client: OkHttpClient =
+  private val okHttpClient: OkHttpClient =
     OkHttpClient.Builder()
       .connectTimeout(30, TimeUnit.SECONDS)
       .readTimeout(240, TimeUnit.SECONDS)
       .writeTimeout(60, TimeUnit.SECONDS)
       .callTimeout(260, TimeUnit.SECONDS)
       .build()
+
+  private val moshi: Moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+
+  private val apiService: GeminiApiService =
+    customService
+      ?: Retrofit.Builder()
+        .baseUrl(GeminiApiService.BASE_URL)
+        .client(okHttpClient)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(GeminiApiService::class.java)
 
   suspend fun translateBatch(
     apiKey: String,
@@ -57,10 +66,7 @@ class GeminiApiClient {
   ): GeminiCallResult =
     withContext(Dispatchers.IO) {
       val cleanModel = model.trim().removePrefix("models/")
-      val url =
-        "https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent?key=$apiKey"
-
-      val requestJson =
+      val requestBody =
         buildRequestBody(
           systemPrompt = systemPrompt,
           fewShotExamples = fewShotExamples,
@@ -75,31 +81,29 @@ class GeminiApiClient {
           thinkingBudget = thinkingBudget,
         )
 
-      val request =
-        Request.Builder()
-          .url(url)
-          .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
-          .header("Content-Type", "application/json")
-          .build()
-
       try {
-        val response = client.newCall(request).awaitCancellable()
-        response.use { resp ->
-          val bodyString = resp.body?.string().orEmpty()
-          if (resp.isSuccessful) {
-            val extracted = extractCandidateText(bodyString)
-            if (extracted.isNullOrBlank()) {
-              GeminiCallResult.RetryableError(
-                reason = "Empty response returned by Gemini API",
-                httpCode = resp.code,
-              )
-            } else {
-              GeminiCallResult.Success(extracted)
-            }
+        val response =
+          apiService.generateContent(
+            model = cleanModel,
+            apiKey = apiKey,
+            request = requestBody,
+          )
+        if (response.isSuccessful) {
+          val extracted = extractCandidateText(response.body())
+          if (extracted.isNullOrBlank()) {
+            GeminiCallResult.RetryableError(
+              reason = "Empty response returned by Gemini API",
+              httpCode = response.code(),
+            )
           } else {
-            classifyHttpFailure(resp.code, bodyString)
+            GeminiCallResult.Success(extracted)
           }
+        } else {
+          val errorPayload = response.errorBody()?.string().orEmpty()
+          classifyHttpFailure(response.code(), errorPayload)
         }
+      } catch (cancel: CancellationException) {
+        throw cancel
       } catch (e: SocketTimeoutException) {
         GeminiCallResult.RetryableError("Network timeout: ${e.message ?: "Request timed out"}")
       } catch (e: UnknownHostException) {
@@ -111,7 +115,7 @@ class GeminiApiClient {
       }
     }
 
-  private fun buildRequestBody(
+  internal fun buildRequestBody(
     systemPrompt: String,
     fewShotExamples: List<FewShotExample>,
     inputMode: InputMode,
@@ -123,7 +127,7 @@ class GeminiApiClient {
     fileName: String,
     temperature: Float,
     thinkingBudget: Int,
-  ): JSONObject {
+  ): GeminiGenerateContentRequest {
     val contextHeader =
       buildString {
         appendLine(systemPrompt.trim())
@@ -144,7 +148,7 @@ class GeminiApiClient {
         appendLine("- Source File: $fileName (Batch $batchIndex of $totalBatches)")
       }.trim()
 
-    val contentsArray = JSONArray()
+    val contentsList = ArrayList<GeminiContent>()
 
     // Add configured few-shot examples as alternating user/model demonstration turns
     fewShotExamples
@@ -153,17 +157,17 @@ class GeminiApiClient {
         val notePrefix = if (ex.note.isNotBlank()) "[Style note: ${ex.note.trim()}]\n" else ""
         val userTurnText =
           "Example ${idx + 1} - Translate into Bengali following the exact style and SRT structure:\n$notePrefix${ex.englishText.trim()}"
-        contentsArray.put(
-          JSONObject().apply {
-            put("role", "user")
-            put("parts", JSONArray().put(JSONObject().put("text", userTurnText)))
-          }
+        contentsList.add(
+          GeminiContent(
+            role = "user",
+            parts = listOf(GeminiPart(text = userTurnText)),
+          )
         )
-        contentsArray.put(
-          JSONObject().apply {
-            put("role", "model")
-            put("parts", JSONArray().put(JSONObject().put("text", ex.bengaliTranslation.trim())))
-          }
+        contentsList.add(
+          GeminiContent(
+            role = "model",
+            parts = listOf(GeminiPart(text = ex.bengaliTranslation.trim())),
+          )
         )
       }
 
@@ -176,57 +180,38 @@ Return ONLY the translated .srt blocks with identical serial numbers and identic
 $batchSrtPayload
       """.trimIndent()
 
-    contentsArray.put(
-      JSONObject().apply {
-        put("role", "user")
-        put("parts", JSONArray().put(JSONObject().put("text", batchInstruction)))
-      }
+    contentsList.add(
+      GeminiContent(
+        role = "user",
+        parts = listOf(GeminiPart(text = batchInstruction)),
+      )
     )
 
     val generationConfig =
-      JSONObject().apply {
-        put("temperature", temperature.toDouble())
-        if (thinkingBudget > 0) {
-          put(
-            "thinkingConfig",
-            JSONObject().apply { put("thinkingBudget", thinkingBudget) },
-          )
-        }
-      }
-
-    return JSONObject().apply {
-      put(
-        "systemInstruction",
-        JSONObject().put("parts", JSONArray().put(JSONObject().put("text", contextHeader))),
+      GeminiGenerationConfig(
+        temperature = temperature.toDouble(),
+        thinkingConfig = if (thinkingBudget > 0) GeminiThinkingConfig(thinkingBudget) else null,
       )
-      put("contents", contentsArray)
-      put("generationConfig", generationConfig)
-    }
+
+    return GeminiGenerateContentRequest(
+      systemInstruction = GeminiContent(parts = listOf(GeminiPart(text = contextHeader))),
+      contents = contentsList,
+      generationConfig = generationConfig,
+    )
   }
 
-  private fun extractCandidateText(rawJson: String): String? {
-    return try {
-      val root = JSONObject(rawJson)
-      val candidates = root.optJSONArray("candidates") ?: return null
-      if (candidates.length() == 0) return null
-      val firstCandidate = candidates.getJSONObject(0)
-      val content = firstCandidate.optJSONObject("content") ?: return null
-      val parts = content.optJSONArray("parts") ?: return null
-      val sb = StringBuilder()
-      for (i in 0 until parts.length()) {
-        val part = parts.getJSONObject(i)
-        // Skip internal thinking parts if marked thought=true
-        if (part.optBoolean("thought", false)) continue
-        val text = part.optString("text", "")
-        if (text.isNotEmpty()) {
-          if (sb.isNotEmpty()) sb.append('\n')
-          sb.append(text)
-        }
+  private fun extractCandidateText(response: GeminiGenerateContentResponse?): String? {
+    val parts = response?.candidates?.firstOrNull()?.content?.parts ?: return null
+    val sb = StringBuilder()
+    for (part in parts) {
+      if (part.thought == true) continue
+      val text = part.text.orEmpty()
+      if (text.isNotEmpty()) {
+        if (sb.isNotEmpty()) sb.append('\n')
+        sb.append(text)
       }
-      sb.toString().trim()
-    } catch (_: Exception) {
-      null
     }
+    return sb.toString().trim().ifBlank { null }
   }
 
   internal fun classifyHttpFailure(code: Int, rawBody: String): GeminiCallResult {
@@ -298,31 +283,5 @@ $batchSrtPayload
           code,
         )
     }
-  }
-
-  private suspend fun Call.awaitCancellable(): Response =
-    suspendCancellableCoroutine { cont ->
-      cont.invokeOnCancellation { cancel() }
-      enqueue(
-        object : Callback {
-          override fun onFailure(call: Call, e: IOException) {
-            if (cont.isActive) {
-              cont.resumeWith(Result.failure(e))
-            }
-          }
-
-          override fun onResponse(call: Call, response: Response) {
-            if (cont.isActive) {
-              cont.resume(response)
-            } else {
-              response.close()
-            }
-          }
-        }
-      )
-    }
-
-  companion object {
-    private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
   }
 }

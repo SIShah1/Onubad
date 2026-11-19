@@ -6,6 +6,10 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BSubApplication
+import com.example.data.local.FileTranslationProgress
+import com.example.data.local.RoomTranslationProgress
+import com.example.data.local.SubtitleTranslation
+import com.example.data.local.SubtitleTranslationStatus
 import com.example.data.local.TranslationHistoryEntity
 import com.example.domain.model.ApiKeyEntry
 import com.example.domain.model.AppSettings
@@ -18,7 +22,8 @@ import com.example.domain.model.SelectedSubtitleFile
 import com.example.domain.model.ThemeMode
 import com.example.domain.model.TranslationJobRequest
 import com.example.domain.model.TranslationSessionState
-import com.example.service.TranslationForegroundService
+import com.example.worker.TranslationWorkScheduler
+import androidx.work.WorkInfo
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +69,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   private val settingsRepo = app.settingsRepository
   private val keyStorage = app.secureKeyStorage
   private val historyRepo = app.historyRepository
+  private val subtitleTranslationRepo = app.subtitleTranslationRepository
   private val fileStorage = app.subtitleFileStorage
   private val coordinator = app.translationCoordinator
 
@@ -88,7 +94,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
       initialValue = emptyList(),
     )
 
+  val subtitleTranslations: StateFlow<List<SubtitleTranslation>> =
+    subtitleTranslationRepo.allTranslations.stateIn(
+      scope = viewModelScope,
+      started = SharingStarted.WhileSubscribed(5000),
+      initialValue = emptyList(),
+    )
+
   val sessionState: StateFlow<TranslationSessionState> = coordinator.sessionState
+
+  val roomTranslationProgress: StateFlow<RoomTranslationProgress> =
+    subtitleTranslationRepo
+      .observeOverallProgress()
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = RoomTranslationProgress(),
+      )
+
+  val fileTranslationProgressList: StateFlow<List<FileTranslationProgress>> =
+    subtitleTranslationRepo
+      .observeFileProgressList()
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList(),
+      )
+
+  val backgroundWorkInfos: StateFlow<List<WorkInfo>> =
+    TranslationWorkScheduler.observeWorkInfo(app)
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList(),
+      )
 
   private val _studioForm = MutableStateFlow(StudioFormState())
   val studioForm: StateFlow<StudioFormState> = _studioForm.asStateFlow()
@@ -230,17 +269,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         secondaryMeta = if (form.inputMode == InputMode.MOVIE) form.releaseYear else form.season,
         files = files,
       )
-    coordinator.prepareJobRequest(request)
-    TranslationForegroundService.startTranslationService(app)
+    coordinator.markQueued(request)
+    viewModelScope.launch {
+      TranslationWorkScheduler.enqueueTranslation(app, request)
+    }
     return true
   }
 
   fun abortTranslation() {
-    TranslationForegroundService.abortTranslationService(app)
+    TranslationWorkScheduler.cancelTranslation(app)
+    coordinator.abortTranslation()
   }
 
   fun clearProcessingLogs() {
     coordinator.clearLogs()
+    if (!sessionState.value.isRunningOrCooldown) {
+      viewModelScope.launch { subtitleTranslationRepo.clearAll() }
+    }
   }
 
   // --- API Key Manager ---
@@ -459,5 +504,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
       historyRepo.deleteRecord(item.id)
       _uiMessages.emit("Deleted ${item.outputFileName} from history.")
     }
+  }
+
+  // --- SubtitleTranslation Repository Abstractions ---
+
+  fun observeJobTranslations(jobId: String): kotlinx.coroutines.flow.Flow<List<SubtitleTranslation>> =
+    subtitleTranslationRepo.observeJobTranslations(jobId)
+
+  fun observeTranslationsByStatus(
+    status: SubtitleTranslationStatus
+  ): kotlinx.coroutines.flow.Flow<List<SubtitleTranslation>> =
+    subtitleTranslationRepo.observeByStatus(status)
+
+  fun insertSubtitleTranslation(
+    jobId: String,
+    fileName: String,
+    blockIndex: Int,
+    timestamp: String,
+    originalEnglishText: String,
+    translatedBengaliText: String? = null,
+  ) {
+    viewModelScope.launch {
+      subtitleTranslationRepo.insertTranslation(
+        jobId = jobId,
+        fileName = fileName,
+        blockIndex = blockIndex,
+        timestamp = timestamp,
+        originalEnglishText = originalEnglishText,
+        translatedBengaliText = translatedBengaliText,
+      )
+    }
+  }
+
+  fun markSubtitleTranslated(id: Long, translatedBengaliText: String) {
+    viewModelScope.launch {
+      subtitleTranslationRepo.markAsTranslated(id, translatedBengaliText)
+    }
+  }
+
+  fun deleteSubtitleJob(jobId: String) {
+    viewModelScope.launch { subtitleTranslationRepo.deleteJob(jobId) }
+  }
+
+  fun clearSubtitleTranslations() {
+    viewModelScope.launch { subtitleTranslationRepo.clearAll() }
   }
 }

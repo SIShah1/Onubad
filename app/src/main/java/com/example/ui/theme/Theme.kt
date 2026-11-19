@@ -11,7 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.ThemeMode
 
-private val BSubDarkColorScheme =
+internal val BSubDarkColorScheme =
   darkColorScheme(
     primary = CinemaAmberBright,
     onPrimary = Color(0xFF1E1300),
@@ -44,7 +44,7 @@ private val BSubDarkColorScheme =
     onErrorContainer = Color(0xFFFECDD3),
   )
 
-private val BSubLightColorScheme =
+internal val BSubLightColorScheme =
   lightColorScheme(
     primary = AmberLightPrimary,
     onPrimary = Color.White,
@@ -54,7 +54,7 @@ private val BSubLightColorScheme =
     onSecondary = Color.White,
     secondaryContainer = CyanLightContainer,
     onSecondaryContainer = Color(0xFF083344),
-    tertiary = Color(0xFF059669),
+    tertiary = Color(0xFF047857),
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFD1FAE5),
     onTertiaryContainer = Color(0xFF064E3B),
@@ -64,14 +64,14 @@ private val BSubLightColorScheme =
     onSurface = TextPrimaryLight,
     surfaceVariant = LightSurfaceVariant,
     onSurfaceVariant = TextSecondaryLight,
-    surfaceContainerLowest = Color.White,
-    surfaceContainerLow = Color(0xFFF8FAFC),
-    surfaceContainer = LightSurface,
-    surfaceContainerHigh = LightSurfaceVariant,
-    surfaceContainerHighest = Color(0xFFDFE6F0),
+    surfaceContainerLowest = Color(0xFFF1F5F9),
+    surfaceContainerLow = LightSurfaceLow,
+    surfaceContainer = LightSurfaceVariant,
+    surfaceContainerHigh = LightSurface,
+    surfaceContainerHighest = Color(0xFFE2E8F0),
     outline = LightOutline,
-    outlineVariant = Color(0xFFE2E8F0),
-    error = Color(0xFFE11D48),
+    outlineVariant = LightOutlineVariant,
+    error = Color(0xFFBE123C),
     onError = Color.White,
     errorContainer = Color(0xFFFFE4E6),
     onErrorContainer = Color(0xFF881337),
@@ -88,21 +88,14 @@ val BSubShapes =
 @Composable
 fun BSubTranslatorTheme(
   themeMode: ThemeMode = ThemeMode.DARK,
+  onThemeModeChange: (ThemeMode) -> Unit = {},
+  animateTransitions: Boolean = true,
   content: @Composable () -> Unit,
 ) {
-  val useDark =
-    when (themeMode) {
-      ThemeMode.DARK -> true
-      ThemeMode.LIGHT -> false
-      ThemeMode.SYSTEM -> isSystemInDarkTheme()
-    }
-
-  val colorScheme = if (useDark) BSubDarkColorScheme else BSubLightColorScheme
-
-  MaterialTheme(
-    colorScheme = colorScheme,
-    typography = BSubTypography,
-    shapes = BSubShapes,
+  ThemeProvider(
+    themeMode = themeMode,
+    onThemeModeChange = onThemeModeChange,
+    animateTransitions = animateTransitions,
     content = content,
   )
 }
