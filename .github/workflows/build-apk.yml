@@ -27,10 +27,20 @@ jobs:
           printf '\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > "$SDK_ROOT/licenses/android-sdk-license"
           printf '\n84831b9409646a918e30573bab4c9c91346d8abd\n' > "$SDK_ROOT/licenses/android-sdk-preview-license"
 
-      - name: Decode debug keystore
+      - name: Ensure debug keystore exists
         run: |
           if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
             base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
       - name: Setup Gradle 9.3.1
