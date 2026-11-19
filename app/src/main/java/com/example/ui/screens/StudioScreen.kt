@@ -69,7 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -430,98 +430,114 @@ private fun StudioHeroBanner(
   activeKeysCount: Int,
   onNavigateToKeys: () -> Unit,
 ) {
-  Box(
-    modifier =
-      Modifier.fillMaxWidth()
-        .height(132.dp)
-        .clip(MaterialTheme.shapes.large),
+  val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+  Surface(
+    modifier = Modifier.fillMaxWidth().height(132.dp),
+    shape = MaterialTheme.shapes.large,
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    tonalElevation = 2.dp,
   ) {
-    Image(
-      painter = painterResource(id = R.drawable.img_studio_banner_1795096561719),
-      contentDescription = "BSub Translator Studio Banner",
-      contentScale = ContentScale.Crop,
-      modifier = Modifier.fillMaxSize(),
-    )
-    Box(
-      modifier =
-        Modifier.fillMaxSize()
-          .background(
-            Brush.horizontalGradient(
-              colors =
-                listOf(
-                  Color(0xEE0A0F1A),
-                  Color(0xCC0D1321),
-                  Color(0x990D1321),
-                )
-            )
-          ),
-    )
+    Box(modifier = Modifier.fillMaxSize()) {
+      Image(
+        painter = painterResource(id = R.drawable.img_studio_banner_1795096561719),
+        contentDescription = "BSub Translator Studio Banner",
+        contentScale = ContentScale.Crop,
+        alpha = if (isDark) 0.92f else 0.14f,
+        modifier = Modifier.fillMaxSize(),
+      )
+      Box(
+        modifier =
+          Modifier.fillMaxSize()
+            .background(
+              Brush.horizontalGradient(
+                colors =
+                  if (isDark) {
+                    listOf(
+                      MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f),
+                      MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.78f),
+                      MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.54f),
+                    )
+                  } else {
+                    listOf(
+                      MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                      MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.86f),
+                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                    )
+                  }
+              )
+            ),
+      )
 
-    Column(
-      modifier = Modifier.fillMaxSize().padding(16.dp),
-      verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+      Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
       ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "BSub Translator",
-            style = MaterialTheme.typography.headlineMedium,
-            color = Color.White,
-          )
-          Text(
-            text = "Automated English -> Bengali SRT Studio",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFCBD5E1),
-          )
-        }
-
-        Surface(
-          onClick = onNavigateToKeys,
-          shape = RoundedCornerShape(50),
-          color = Color(0xFF1E293B).copy(alpha = 0.88f),
-          border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.45f)),
-          modifier = Modifier.testTag("hero_keys_chip"),
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
         ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              imageVector = Icons.Rounded.Key,
-              contentDescription = "API Keys",
-              tint = Color(0xFFFBBF24),
-              modifier = Modifier.size(15.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
+          Column(modifier = Modifier.weight(1f)) {
             Text(
-              text =
-                if (totalKeysCount == 0) "0 Keys"
-                else "$activeKeysCount/$totalKeysCount Keys",
-              style = MaterialTheme.typography.labelSmall,
-              color = Color.White,
+              text = "BSub Translator",
+              style = MaterialTheme.typography.headlineMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Automated English -> Bengali SRT Studio",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
-        }
-      }
 
-      Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        StatusPill(
-          text = modelName,
-          containerColor = Color(0xFF22D3EE).copy(alpha = 0.18f),
-          contentColor = Color(0xFF67E8F9),
-        )
-        StatusPill(
-          text = "$chunkSize blocks/batch",
-          containerColor = Color(0xFFF59E0B).copy(alpha = 0.2f),
-          contentColor = Color(0xFFFDE68A),
-        )
+          Surface(
+            onClick = onNavigateToKeys,
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+            modifier = Modifier.testTag("hero_keys_chip"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.Key,
+                contentDescription = "API Keys",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(15.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text =
+                  if (totalKeysCount == 0) "0 Keys"
+                  else "$activeKeysCount/$totalKeysCount Keys",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+          }
+        }
+
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          StatusPill(
+            text = modelName,
+            containerColor =
+              MaterialTheme.colorScheme.secondaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+          )
+          StatusPill(
+            text = "$chunkSize blocks/batch",
+            containerColor =
+              MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          )
+        }
       }
     }
   }
