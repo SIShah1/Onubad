@@ -11,6 +11,7 @@ import android.provider.OpenableColumns
 import androidx.core.content.FileProvider
 import com.example.domain.model.SelectedSubtitleFile
 import com.example.srt.SrtEngine
+import com.example.srt.SrtParser
 import java.io.File
 import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +47,7 @@ class SubtitleFileStorage(private val context: Context) {
       }
 
       val rawText =
-        resolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+        resolver.openInputStream(uri)?.use { SrtParser.readRaw(it) }
           ?: return@withContext null
 
       val resolvedSize =

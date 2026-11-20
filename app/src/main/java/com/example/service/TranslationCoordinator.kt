@@ -4,7 +4,6 @@ import com.example.data.local.HistoryRepository
 import com.example.data.local.SubtitleTranslationRepository
 import com.example.data.local.TranslationHistoryEntity
 import com.example.data.network.ApiKeyRotationManager
-import com.example.data.network.BatchValidationOutcome
 import com.example.data.network.GeminiApiClient
 import com.example.data.network.RotationExecutionResult
 import com.example.data.preferences.SecureKeyStorage
@@ -21,7 +20,7 @@ import com.example.domain.model.TranslationSessionState
 import com.example.domain.model.TranslationStatus
 import com.example.logging.TranslationLogger
 import com.example.srt.SrtEngine
-import com.example.srt.ValidationResult
+import com.example.srt.SrtParser
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,6 +49,13 @@ class TranslationCoordinator(
   private val geminiApiClient: GeminiApiClient,
   private val keyRotationManager: ApiKeyRotationManager =
     ApiKeyRotationManager(keyStorage = keyStorage, geminiApiClient = geminiApiClient),
+  private val subtitleTranslationService: SubtitleTranslationService =
+    SubtitleTranslationService(
+      settingsRepository = settingsRepository,
+      fileStorage = fileStorage,
+      geminiApiClient = geminiApiClient,
+      keyRotationManager = keyRotationManager,
+    ),
 ) {
 
   private val _sessionState = MutableStateFlow(TranslationSessionState())
@@ -267,9 +273,13 @@ class TranslationCoordinator(
     for ((fileIdx, file) in request.files.withIndex()) {
       currentCoroutineContext().ensureActive()
       val displayFileNum = fileIdx + 1
-      val chunkSize = settings.effectiveChunkSize
-      val batches = file.blocks.chunked(chunkSize)
-      val totalBatches = batches.size.coerceAtLeast(1)
+      val segmentedPlan =
+        subtitleTranslationService.parseAndSegment(
+          file = file,
+          chunkSize = settings.effectiveChunkSize,
+        )
+      val segments = segmentedPlan.segments
+      val totalBatches = segments.size.coerceAtLeast(1)
 
       appendLog("File $displayFileNum/$totalFiles – Processing (${file.fileName})", LogLevel.INFO)
       _sessionState.update {
@@ -282,7 +292,7 @@ class TranslationCoordinator(
         )
       }
 
-      if (file.blocks.isEmpty()) {
+      if (segmentedPlan.isEmpty) {
         appendLog(
           "File $displayFileNum/$totalFiles – Skipped (no valid SRT blocks)",
           LogLevel.WARNING,
@@ -300,16 +310,16 @@ class TranslationCoordinator(
         subtitleTranslationRepository.seedPendingBlocks(
           jobId = fileJobId,
           fileName = file.fileName,
-          blocks = file.blocks,
+          blocks = segmentedPlan.parsedBlocks,
         )
       }
 
-      val translatedFileBlocks = ArrayList<SrtBlock>(file.blocks.size)
+      val translatedFileBlocks = ArrayList<SrtBlock>(segmentedPlan.totalBlocks)
 
       try {
-        for ((batchIdx, batchBlocks) in batches.withIndex()) {
+        for (segment in segments) {
           currentCoroutineContext().ensureActive()
-          val displayBatchNum = batchIdx + 1
+          val displayBatchNum = segment.segmentIndex
           _sessionState.update {
             it.copy(
               currentBatchNumber = displayBatchNum,
@@ -319,31 +329,15 @@ class TranslationCoordinator(
           appendLog("Batch $displayBatchNum/$totalBatches – Processing", LogLevel.INFO)
 
           val rotationResult =
-            keyRotationManager.executeBatchWithRotation(
+            subtitleTranslationService.translateSegmentWithRotation(
               session = rotationSession,
-              model = settings.effectiveModel,
-              temperature = settings.effectiveTemperature,
-              thinkingBudget = settings.effectiveThinkingBudget,
-              systemPrompt = settings.effectivePrompt,
-              fewShotExamples = settings.fewShotExamples,
+              segment = segment,
+              settings = settings,
               inputMode = request.inputMode,
               title = request.title,
               secondaryMeta = request.secondaryMeta,
-              batchSrtPayload = SrtEngine.formatBlocks(batchBlocks),
-              batchIndex = displayBatchNum,
-              totalBatches = totalBatches,
               fileName = file.fileName,
-              maxAttemptsPerKey = settings.effectiveMaxAttemptsPerKey,
-              retryIntervalSeconds = settings.effectiveRetryIntervalSeconds,
-              cooldownMinutes = settings.effectiveCooldownMinutes,
               workId = workId,
-              validateOutput = { rawText ->
-                val parsedOutput = SrtEngine.parseModelOutput(rawText)
-                when (val validation = SrtEngine.validateBatch(batchBlocks, parsedOutput)) {
-                  is ValidationResult.Valid -> BatchValidationOutcome.Valid(validation.blocks)
-                  is ValidationResult.Invalid -> BatchValidationOutcome.Invalid(validation.reason)
-                }
-              },
               onAttemptStarted = { keyNum, keyLabel, attempt, maxAttempts ->
                 _sessionState.update {
                   it.copy(
@@ -414,8 +408,13 @@ class TranslationCoordinator(
         throw cancel
       }
 
-      // All batches for this file completed & validated -> Save output file & Room history
-      val formattedSrt = SrtEngine.formatBlocks(translatedFileBlocks)
+      // All segments for this file completed & validated -> Reconstruct output SRT preserving timecodes
+      val formattedSrt =
+        SrtParser.reconstructFromBlocks(
+          originalBlocks = segmentedPlan.parsedBlocks,
+          translatedBlocks = translatedFileBlocks,
+          strictTimecodeCheck = true,
+        )
       val outputName = SrtEngine.buildOutputFileName(file.fileName, settings)
       val savedOutput = fileStorage.saveTranslatedSrt(outputName, formattedSrt)
 

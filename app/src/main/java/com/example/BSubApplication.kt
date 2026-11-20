@@ -12,6 +12,7 @@ import com.example.data.preferences.SecureKeyStorage
 import com.example.data.preferences.SettingsRepository
 import com.example.data.storage.SubtitleFileStorage
 import com.example.logging.TranslationLogger
+import com.example.service.SubtitleTranslationService
 import com.example.service.TranslationCoordinator
 
 class BSubApplication : Application() {
@@ -38,6 +39,14 @@ class BSubApplication : Application() {
       geminiApiClient = geminiApiClient,
     )
   }
+  val subtitleTranslationService: SubtitleTranslationService by lazy {
+    SubtitleTranslationService(
+      settingsRepository = settingsRepository,
+      fileStorage = subtitleFileStorage,
+      geminiApiClient = geminiApiClient,
+      keyRotationManager = apiKeyRotationManager,
+    )
+  }
 
   @Volatile private var coordinatorOverride: TranslationCoordinator? = null
 
@@ -50,6 +59,7 @@ class BSubApplication : Application() {
       fileStorage = subtitleFileStorage,
       geminiApiClient = geminiApiClient,
       keyRotationManager = apiKeyRotationManager,
+      subtitleTranslationService = subtitleTranslationService,
     )
   }
 
@@ -61,6 +71,11 @@ class BSubApplication : Application() {
     coordinatorOverride =
       customService?.let { service ->
         val customClient = GeminiApiClient(customService = service)
+        val customRotationManager =
+          ApiKeyRotationManager(
+            keyStorage = secureKeyStorage,
+            geminiApiClient = customClient,
+          )
         TranslationCoordinator(
           settingsRepository = settingsRepository,
           keyStorage = secureKeyStorage,
@@ -68,10 +83,13 @@ class BSubApplication : Application() {
           subtitleTranslationRepository = subtitleTranslationRepository,
           fileStorage = subtitleFileStorage,
           geminiApiClient = customClient,
-          keyRotationManager =
-            ApiKeyRotationManager(
-              keyStorage = secureKeyStorage,
+          keyRotationManager = customRotationManager,
+          subtitleTranslationService =
+            SubtitleTranslationService(
+              settingsRepository = settingsRepository,
+              fileStorage = subtitleFileStorage,
               geminiApiClient = customClient,
+              keyRotationManager = customRotationManager,
             ),
         )
       }

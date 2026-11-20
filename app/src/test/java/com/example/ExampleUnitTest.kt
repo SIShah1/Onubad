@@ -5,9 +5,17 @@ import com.example.data.network.GeminiCallResult
 import com.example.data.preferences.SecureKeyStorage
 import com.example.domain.model.AppSettings
 import com.example.domain.model.NamingMode
+import com.example.domain.model.SrtBlock
 import com.example.srt.SrtEngine
+import com.example.srt.SrtParser
 import com.example.srt.ValidationResult
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.nio.charset.Charset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -247,4 +255,96 @@ class ExampleUnitTest {
       assertEquals(listOf("key-exhausted", "key-active-2"), capturedKeys)
       assertEquals(listOf("gemini-3.8-flash", "gemini-3.8-flash"), capturedModels)
     }
+
+  @Test
+  fun `srt parser reads utf16 and utf8 bom files ignores dialogue arrows and reconstructs bengali srt`() {
+    val rawSrt =
+      """
+      1
+      00:00:01,000 --> 00:00:03,500 X1:100 X2:200
+      Go left --> right
+      Hurry up!
+
+      2
+      00:00:04.250 --> 00:00:06.750
+      Welcome home.
+      """.trimIndent()
+
+    // Verify UTF-16LE BOM stream reading
+    val utf16Bytes =
+      byteArrayOf(0xFF.toByte(), 0xFE.toByte()) +
+        rawSrt.toByteArray(Charset.forName("UTF-16LE"))
+    val parsedFromStream = SrtParser.parse(ByteArrayInputStream(utf16Bytes))
+    assertEquals(2, parsedFromStream.size)
+    assertEquals("00:00:01,000 --> 00:00:03,500 X1:100 X2:200", parsedFromStream[0].timestamp)
+    assertEquals("Go left --> right\nHurry up!", parsedFromStream[0].content)
+
+    val range = SrtParser.parseTimecodeRange(parsedFromStream[0].timestamp)
+    assertNotNull(range)
+    assertEquals(1000L, range!!.startMillis)
+    assertEquals(3500L, range.endMillis)
+    assertEquals(2500L, range.durationMillis)
+    assertTrue(range.isChronologicallyValid)
+    assertFalse(SrtParser.isValidTimecodeLine("Go left --> right"))
+
+    // Replace subtitle text with Bengali translations and reconstruct to temp file
+    val bengaliMap =
+      mapOf(
+        1 to "বাম থেকে --> ডানে যাও\nতাড়াতাড়ি করো!",
+        2 to "বাড়িতে স্বাগতম।",
+      )
+    val reconstructed = SrtParser.reconstruct(parsedFromStream, bengaliMap)
+
+    val tempFile = File.createTempFile("bsub_parser_test", ".srt")
+    try {
+      val replacedItems = SrtParser.replaceTranslations(parsedFromStream, bengaliMap)
+      SrtParser.write(tempFile, replacedItems)
+      val reparsed = SrtParser.parse(tempFile)
+      assertEquals(2, reparsed.size)
+      assertEquals("00:00:01,000 --> 00:00:03,500 X1:100 X2:200", reparsed[0].timestamp)
+      assertEquals("00:00:04.250 --> 00:00:06.750", reparsed[1].timestamp)
+      assertEquals("বাম থেকে --> ডানে যাও\nতাড়াতাড়ি করো!", reparsed[0].content)
+      assertEquals("বাড়িতে স্বাগতম।", reparsed[1].content)
+      assertTrue(reconstructed.contains("00:00:01,000 --> 00:00:03,500 X1:100 X2:200"))
+    } finally {
+      tempFile.delete()
+    }
+  }
+
+  @Test
+  fun `srt parser enforces timecode integrity during block translation reconstruction`() {
+    val originalBlocks =
+      listOf(
+        SrtBlock(index = 1, timestamp = "00:00:01,000 --> 00:00:03,000", lines = listOf("Hello")),
+        SrtBlock(index = 2, timestamp = "00:00:04,000 --> 00:00:06,000", lines = listOf("World")),
+      )
+    val validTranslatedBlocks =
+      listOf(
+        SrtBlock(index = 1, timestamp = "00:00:01.000 --> 00:00:03.000", lines = listOf("হ্যালো")),
+        SrtBlock(index = 2, timestamp = "00:00:04,000 --> 00:00:06,000", lines = listOf("বিশ্ব")),
+      )
+
+    val rebuilt = SrtParser.reconstructFromBlocks(originalBlocks, validTranslatedBlocks)
+    assertEquals(
+      """
+      1
+      00:00:01,000 --> 00:00:03,000
+      হ্যালো
+
+      2
+      00:00:04,000 --> 00:00:06,000
+      বিশ্ব
+      """.trimIndent() + "\n",
+      rebuilt,
+    )
+
+    val tamperedBlocks =
+      listOf(
+        SrtBlock(index = 1, timestamp = "00:00:01,000 --> 00:00:09,999", lines = listOf("হ্যালো")),
+        SrtBlock(index = 2, timestamp = "00:00:04,000 --> 00:00:06,000", lines = listOf("বিশ্ব")),
+      )
+    assertThrows(IllegalArgumentException::class.java) {
+      SrtParser.reconstructFromBlocks(originalBlocks, tamperedBlocks, strictTimecodeCheck = true)
+    }
+  }
 }

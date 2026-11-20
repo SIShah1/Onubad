@@ -13,7 +13,6 @@ sealed class ValidationResult {
 
 object SrtEngine {
 
-  private val TIMESTAMP_ARROW_REGEX = Regex("""\s*-->\s*""")
   private val CODE_FENCE_OPEN_REGEX = Regex("""^```[a-zA-Z0-9_-]*\s*""")
   private val CODE_FENCE_CLOSE_REGEX = Regex("""\s*```$""")
 
@@ -80,7 +79,10 @@ object SrtEngine {
         )
       }
 
-      if (normalizeTimestamp(translated.timestamp) != normalizeTimestamp(original.timestamp)) {
+      if (
+        SrtParser.normalizeTimestamp(translated.timestamp) !=
+          SrtParser.normalizeTimestamp(original.timestamp)
+      ) {
         return ValidationResult.Invalid(
           "Timestamp mismatch at block #${original.index}"
         )
@@ -107,25 +109,7 @@ object SrtEngine {
     return ValidationResult.Valid(sanitizedBlocks)
   }
 
-  fun formatBlocks(blocks: List<SrtBlock>): String {
-    if (blocks.isEmpty()) return ""
-    val sb = StringBuilder(blocks.size * 64)
-    blocks.forEachIndexed { idx, block ->
-      sb.append(block.index).append('\n')
-      sb.append(block.timestamp).append('\n')
-      if (block.lines.isEmpty()) {
-        sb.append('\n')
-      } else {
-        block.lines.forEach { line ->
-          sb.append(line).append('\n')
-        }
-      }
-      if (idx < blocks.lastIndex) {
-        sb.append('\n')
-      }
-    }
-    return sb.toString()
-  }
+  fun formatBlocks(blocks: List<SrtBlock>): String = SrtParser.formatBlocks(blocks)
 
   fun buildOutputFileName(originalFileName: String, settings: AppSettings): String {
     val cleanName = originalFileName.trim().ifBlank { "subtitle.srt" }
@@ -148,13 +132,6 @@ object SrtEngine {
       }
 
     return sanitizeFileSegment(rawResult).ifBlank { "${baseName}_BSub.srt" }
-  }
-
-  private fun normalizeTimestamp(timestamp: String): String {
-    return timestamp
-      .trim()
-      .replace(TIMESTAMP_ARROW_REGEX, " --> ")
-      .replace('.', ',')
   }
 
   private fun sanitizeFileSegment(input: String): String {

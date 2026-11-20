@@ -49,6 +49,8 @@ import com.example.domain.model.TranslationSessionState
 import com.example.logging.ErrorCategory
 import com.example.logging.TranslationLogger
 import com.example.logging.WorkManagerDiagnosticTree
+import com.example.service.SubtitleTranslationService
+import com.example.service.SubtitleTranslationServiceResult
 import com.example.ui.screens.StudioScreen
 import com.example.ui.theme.BSubTranslatorTheme
 import com.example.ui.theme.CloverCoralTint
@@ -659,4 +661,144 @@ class ExampleRobolectricTest {
     )
     assertEquals(0xFF006D5B.toInt(), foregroundInfo.notification.color)
   }
+
+  @Test
+  fun `subtitle translation service parses segments prepares gemini requests and rotates keys`() =
+    runBlocking {
+      app.secureKeyStorage.clearAllKeys()
+      app.settingsRepository.setChunkSize(ParamMode.MANUAL, 2)
+      app.settingsRepository.setMaxAttemptsPerKey(ParamMode.MANUAL, 1)
+      app.settingsRepository.setRetryInterval(ParamMode.MANUAL, 1)
+
+      val keyA = "AIzaSyServiceKeyA_1234567890"
+      val keyB = "AIzaSyServiceKeyB_1234567890"
+      app.secureKeyStorage.addSingleKey(keyA, "Primary")
+      app.secureKeyStorage.addSingleKey(keyB, "Backup")
+      app.secureKeyStorage.setActiveKeyIndex(0)
+
+      val rawSrt =
+        """
+        1
+        00:00:01,000 --> 00:00:02,500
+        Good morning.
+
+        2
+        00:00:03,000 --> 00:00:04,500
+        How is everything?
+
+        3
+        00:00:05,000 --> 00:00:06,500
+        All is ready.
+        """.trimIndent()
+
+      val seenRequests = mutableListOf<Pair<String, String>>()
+      val mockGeminiService =
+        object : GeminiApiService {
+          override suspend fun generateContent(
+            model: String,
+            apiKey: String,
+            request: GeminiGenerateContentRequest,
+          ): Response<GeminiGenerateContentResponse> {
+            val promptText = request.contents.last().parts.first().text.orEmpty()
+            seenRequests.add(apiKey to promptText)
+
+            if (apiKey == keyA) {
+              return Response.error(
+                429,
+                """{"error":{"status":"RESOURCE_EXHAUSTED","message":"Rate limit hit"}}"""
+                  .toResponseBody("application/json".toMediaType()),
+              )
+            }
+
+            val responseSrt =
+              if (promptText.contains("Good morning.")) {
+                """
+                1
+                00:00:01,000 --> 00:00:02,500
+                শুভ সকাল।
+
+                2
+                00:00:03,000 --> 00:00:04,500
+                সবকিছু কেমন চলছে?
+                """.trimIndent()
+              } else {
+                """
+                3
+                00:00:05,000 --> 00:00:06,500
+                সবকিছু প্রস্তুত।
+                """.trimIndent()
+              }
+
+            return Response.success(
+              GeminiGenerateContentResponse(
+                candidates =
+                  listOf(
+                    GeminiCandidate(
+                      content = GeminiContent(parts = listOf(GeminiPart(text = responseSrt))),
+                      finishReason = "STOP",
+                    )
+                  )
+              )
+            )
+          }
+        }
+
+      val apiClient = GeminiApiClient(customService = mockGeminiService)
+      val rotationManager =
+        ApiKeyRotationManager(
+          keyStorage = app.secureKeyStorage,
+          geminiApiClient = apiClient,
+        )
+      val service =
+        SubtitleTranslationService(
+          settingsRepository = app.settingsRepository,
+          fileStorage = app.subtitleFileStorage,
+          geminiApiClient = apiClient,
+          keyRotationManager = rotationManager,
+        )
+
+      val settingsSnapshot = app.settingsRepository.getSettingsSnapshot()
+      val plan = service.parseAndSegment(rawSrt, chunkSize = 2, fileName = "demo.srt")
+      assertEquals(3, plan.totalBlocks)
+      assertEquals(2, plan.segments.size)
+      assertEquals(2, plan.segments[0].blocks.size)
+      assertEquals(1, plan.segments[1].blocks.size)
+
+      val prepared =
+        service.prepareTranslationRequest(
+          segment = plan.segments[0],
+          settings = settingsSnapshot,
+          inputMode = InputMode.MOVIE,
+          title = "Demo Movie",
+          secondaryMeta = "2026",
+          fileName = "demo.srt",
+        )
+      assertTrue(
+        prepared.requestBody.contents.last().parts.first().text.orEmpty().contains("Good morning.")
+      )
+
+      val serviceResult =
+        service.translateSrtContentWithRotation(
+          rawSrtContent = rawSrt,
+          fileName = "demo.srt",
+          inputMode = InputMode.MOVIE,
+          title = "Demo Movie",
+          secondaryMeta = "2026",
+          chunkSizeOverride = 2,
+          onRetryDelay = { _, _ -> },
+          onCooldownWait = { minutes ->
+            throw AssertionError("Unexpected cooldown ($minutes min). Seen requests: $seenRequests")
+          },
+        )
+
+      assertTrue(serviceResult is SubtitleTranslationServiceResult.Success)
+      val success = serviceResult as SubtitleTranslationServiceResult.Success
+      assertEquals(2, success.segmentsProcessed)
+      assertEquals(3, success.translatedBlocks.size)
+      assertTrue(success.reconstructedBengaliSrt.contains("00:00:01,000 --> 00:00:02,500\nশুভ সকাল।"))
+      assertTrue(success.reconstructedBengaliSrt.contains("00:00:05,000 --> 00:00:06,500\nসবকিছু প্রস্তুত।"))
+      assertEquals(keyA, seenRequests[0].first)
+      assertEquals(keyB, seenRequests[1].first)
+      assertEquals(keyB, seenRequests[2].first)
+    }
 }
