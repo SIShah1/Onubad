@@ -72,6 +72,7 @@ import com.example.srt.SrtEngine
 import com.example.ui.components.ParamModeHeader
 import com.example.ui.components.SectionTitleRow
 import com.example.ui.components.StudioSectionCard
+import com.example.ui.theme.BSubShape
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalThemeController
 import com.example.ui.viewmodel.MainViewModel
@@ -730,6 +731,7 @@ private fun AdvancedSettingsCard(
 
       Button(
         onClick = { viewModel.updateDefaultPrompt(defaultPromptDraft) },
+        shape = BSubShape.petalButton,
         modifier = Modifier.testTag("save_default_prompt_button"),
       ) {
         Text("Save Default Prompt")

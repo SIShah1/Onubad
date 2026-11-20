@@ -57,6 +57,7 @@ import com.example.domain.model.ApiKeyStatus
 import com.example.ui.components.SectionTitleRow
 import com.example.ui.components.StatusPill
 import com.example.ui.components.StudioSectionCard
+import com.example.ui.theme.BSubShape
 import com.example.ui.theme.JetBrainsMonoFamily
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -232,6 +233,7 @@ fun ApiKeysScreen(
               bulkInput = ""
             },
             enabled = detectedBulkCount > 0 && !isTranslationRunning,
+            shape = BSubShape.petalButton,
             modifier = Modifier.testTag("save_bulk_keys_button"),
           ) {
             Text("Save Keys")

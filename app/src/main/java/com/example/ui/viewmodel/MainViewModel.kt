@@ -76,7 +76,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   val settings: StateFlow<AppSettings> =
     settingsRepo.settingsFlow.stateIn(
       scope = viewModelScope,
-      started = SharingStarted.WhileSubscribed(5000),
+      started = SharingStarted.Eagerly,
       initialValue = AppSettings(),
     )
 
@@ -502,15 +502,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     viewModelScope.launch {
       fileStorage.deleteSavedFiles(item.localBackupPath)
       historyRepo.deleteRecord(item.id)
-      _uiMessages.emit("Deleted ${item.outputFileName.ifBlank { item.originalFileName }} from history.")
-    }
-  }
-
-  fun clearAllHistory() {
-    viewModelScope.launch {
-      historyItems.value.forEach { fileStorage.deleteSavedFiles(it.localBackupPath) }
-      historyRepo.clearAll()
-      _uiMessages.emit("Cleared translation history.")
+      _uiMessages.emit("Deleted ${item.outputFileName} from history.")
     }
   }
 

@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.domain.model.DefaultConfig
+import com.example.ui.theme.BSubShape
 
 @Composable
 fun FirstLaunchPromptDialog(
@@ -126,6 +127,7 @@ fun FirstLaunchPromptDialog(
 
           Button(
             onClick = { onSaveAndContinue(promptDraft) },
+            shape = BSubShape.petalButton,
             modifier = Modifier.testTag("first_launch_save_button"),
           ) {
             Text("Save & Continue")

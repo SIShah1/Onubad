@@ -75,6 +75,16 @@ internal val BSubLightColorScheme =
     onErrorContainer = CloverCoralInk,
   )
 
+/**
+ * The "petal": three round corners and one sharp corner, like the icon's teardrops.
+ * Use it only on the Studio header card and on main action buttons.
+ */
+object BSubShape {
+  val petal = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomEnd = 28.dp, bottomStart = 6.dp)
+  val petalButtonLarge = RoundedCornerShape(topStart = 27.dp, topEnd = 27.dp, bottomEnd = 27.dp, bottomStart = 6.dp)
+  val petalButton = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 5.dp)
+}
+
 val BSubShapes =
   Shapes(
     small = RoundedCornerShape(12.dp),

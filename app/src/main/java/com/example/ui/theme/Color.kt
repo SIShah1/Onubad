@@ -24,6 +24,8 @@ val CloverTerminalBorder = Color(0xFF1A3A32)
 val CloverTerminalText = Color(0xFFD5EBE4)
 val CloverTerminalMuted = Color(0xFF8BB8AB)
 
+val CloverHeroDark = Color(0xFF0E3E33)
+
 // Pine & Clover Night Palette (Dark Mode)
 val StudioMidnight = Color(0xFF081411)
 val StudioAbyss = Color(0xFF0C1C18)

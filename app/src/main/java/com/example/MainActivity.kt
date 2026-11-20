@@ -104,11 +104,15 @@ class MainActivity : ComponentActivity() {
       val mainViewModel: MainViewModel = viewModel()
       val settings by mainViewModel.settings.collectAsStateWithLifecycle()
 
-      ThemeProvider(
-        themeMode = settings.themeMode,
-        onThemeModeChange = mainViewModel::setThemeMode,
-      ) {
-        BSubAppRoot(viewModel = mainViewModel)
+      // Wait for saved settings so the first frame uses the right theme
+      // and the first-launch dialog never flashes for returning users.
+      if (settings.isLoaded) {
+        ThemeProvider(
+          themeMode = settings.themeMode,
+          onThemeModeChange = mainViewModel::setThemeMode,
+        ) {
+          BSubAppRoot(viewModel = mainViewModel)
+        }
       }
     }
   }
@@ -277,7 +281,6 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
                 onExportToUri = viewModel::exportHistoryItemToUri,
                 onCreateShareIntent = viewModel::createShareIntent,
                 onDeleteItem = viewModel::deleteHistoryItem,
-                onClearAllHistory = viewModel::clearAllHistory,
               )
             }
 

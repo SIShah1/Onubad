@@ -7,6 +7,7 @@
     <color name="clover_coral">#FFF28C82</color>
     <color name="studio_midnight">#FF081411</color>
     <color name="light_canvas">#FFF3F8F6</color>
+    <color name="window_background">@color/light_canvas</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 </resources>

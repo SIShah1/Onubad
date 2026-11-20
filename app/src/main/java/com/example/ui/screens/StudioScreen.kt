@@ -8,9 +8,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,23 +66,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.example.R
 import com.example.data.local.FileTranslationProgress
 import com.example.data.local.RoomTranslationProgress
 import com.example.domain.model.ApiKeyEntry
@@ -101,9 +92,10 @@ import com.example.srt.SrtEngine
 import com.example.ui.components.SectionTitleRow
 import com.example.ui.components.StatusPill
 import com.example.ui.components.StudioSectionCard
+import com.example.ui.theme.BSubShape
 import com.example.ui.theme.CloverCoral
 import com.example.ui.theme.CloverEmerald
-import com.example.ui.theme.CloverEmeraldDeep
+import com.example.ui.theme.CloverHeroDark
 import com.example.ui.theme.CloverMintInk
 import com.example.ui.theme.CloverMintSoft
 import com.example.ui.theme.CloverYellow
@@ -421,7 +413,7 @@ fun StudioScreen(
             }
           },
           enabled = formState.activeFiles.isNotEmpty() && !formState.isAnalyzingFiles,
-          shape = RoundedCornerShape(50),
+          shape = BSubShape.petalButtonLarge,
           colors =
             ButtonDefaults.buttonColors(
               containerColor = MaterialTheme.colorScheme.primary,
@@ -443,7 +435,7 @@ fun StudioScreen(
       } else {
         Button(
           onClick = onAbortTranslation,
-          shape = RoundedCornerShape(50),
+          shape = BSubShape.petalButtonLarge,
           colors =
             ButtonDefaults.buttonColors(
               containerColor = MaterialTheme.colorScheme.error,
@@ -488,50 +480,15 @@ private fun StudioHeroBanner(
   val themeController = LocalThemeController.current
   val isDark = themeController.isDarkTheme
   val hasActiveKeys = totalKeysCount > 0 && activeKeysCount > 0
-  val heroStart = if (isDark) Color(0xFF0E3E33) else CloverEmerald
-  val heroEnd = if (isDark) Color(0xFF07231C) else CloverEmeraldDeep
+  val heroColor = if (isDark) CloverHeroDark else CloverEmerald
 
   Surface(
     modifier = Modifier.fillMaxWidth().height(142.dp),
-    shape = MaterialTheme.shapes.large,
-    color = heroStart,
-    border =
-      BorderStroke(
-        width = 1.dp,
-        color = if (isDark) Color(0xFF1F5D4D) else CloverEmeraldDeep.copy(alpha = 0.35f),
-      ),
+    shape = BSubShape.petal,
+    color = heroColor,
     tonalElevation = 0.dp,
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
-      Image(
-        painter = painterResource(id = R.drawable.img_studio_banner_1795096561719),
-        contentDescription = "BSub Translator Studio Banner",
-        contentScale = ContentScale.Crop,
-        alpha = if (isDark) 0.14f else 0.08f,
-        modifier = Modifier.fillMaxSize(),
-      )
-      Box(
-        modifier =
-          Modifier.fillMaxSize()
-            .background(
-              Brush.horizontalGradient(
-                colors = listOf(heroStart.copy(alpha = 0.94f), heroEnd.copy(alpha = 0.96f)),
-              )
-            ),
-      )
-      Canvas(modifier = Modifier.fillMaxSize()) {
-        drawCircle(
-          color = Color(0xFF56CEBA).copy(alpha = 0.09f),
-          radius = size.height * 0.62f,
-          center = Offset(size.width * 0.92f, size.height * 0.25f),
-        )
-        drawCircle(
-          color = CloverYellow.copy(alpha = 0.07f),
-          radius = size.height * 0.42f,
-          center = Offset(size.width * 0.78f, size.height * 0.95f),
-        )
-      }
-
       Column(
         modifier = Modifier.fillMaxSize().padding(18.dp),
         verticalArrangement = Arrangement.SpaceBetween,

@@ -115,6 +115,7 @@ CRITICAL SRT INTEGRITY RULES (MUST NEVER VIOLATE):
 }
 
 data class AppSettings(
+  val isLoaded: Boolean = false,
   val themeMode: ThemeMode = ThemeMode.DARK,
   val hasCompletedFirstLaunchSetup: Boolean = false,
   val promptMode: PromptMode = PromptMode.DEFAULT,

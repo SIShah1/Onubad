@@ -55,6 +55,7 @@ class SettingsRepository(private val context: Context) {
   val settingsFlow: Flow<AppSettings> =
     context.settingsDataStore.data.map { prefs ->
       AppSettings(
+        isLoaded = true,
         themeMode = enumOrDefault(prefs[Keys.THEME_MODE], ThemeMode.DARK),
         hasCompletedFirstLaunchSetup = prefs[Keys.FIRST_LAUNCH_DONE] ?: false,
         promptMode = enumOrDefault(prefs[Keys.PROMPT_MODE], PromptMode.DEFAULT),
