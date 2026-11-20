@@ -29,6 +29,8 @@ import com.example.data.local.FileTranslationProgress
 import com.example.data.local.HistoryRepository
 import com.example.data.local.HistoryTranslationStatus
 import com.example.data.local.RoomTranslationProgress
+import com.example.data.local.SubtitleHistory
+import com.example.data.local.SubtitleHistoryRepository
 import com.example.data.local.SubtitleTranslation
 import com.example.data.local.SubtitleTranslationRepository
 import com.example.data.local.SubtitleTranslationStatus
@@ -37,10 +39,12 @@ import com.example.ui.screens.HistoryScreen
 import com.example.data.network.ApiKeyRotationManager
 import com.example.data.network.GeminiApiClient
 import com.example.data.network.GeminiApiService
+import com.example.data.network.GeminiCallResult
 import com.example.data.network.GeminiCandidate
 import com.example.data.network.GeminiContent
 import com.example.data.network.GeminiGenerateContentRequest
 import com.example.data.network.GeminiGenerateContentResponse
+import com.example.data.network.GeminiKeyRotationInterceptor
 import com.example.data.network.GeminiPart
 import com.example.data.network.RotationExecutionResult
 import com.example.domain.model.ApiKeyStatus
@@ -73,7 +77,10 @@ import com.example.worker.SubtitleTranslationWorker
 import com.example.worker.TranslationWorkScheduler
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Protocol
+import okhttp3.Response as OkHttpResponse
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -172,6 +179,13 @@ class ExampleRobolectricTest {
 
     val fakeGemini =
       object : GeminiApiService {
+        override suspend fun generateContentWithKeyRotation(
+          model: String,
+          request: GeminiGenerateContentRequest,
+          autoRotate: String,
+        ): Response<GeminiGenerateContentResponse> =
+          generateContent(model = model, apiKey = "", request = request)
+
         override suspend fun generateContent(
           model: String,
           apiKey: String,
@@ -437,6 +451,13 @@ class ExampleRobolectricTest {
       val jsonMedia = "application/json".toMediaType()
       val fakeGemini =
         object : GeminiApiService {
+          override suspend fun generateContentWithKeyRotation(
+            model: String,
+            request: GeminiGenerateContentRequest,
+            autoRotate: String,
+          ): Response<GeminiGenerateContentResponse> =
+            generateContent(model = model, apiKey = "", request = request)
+
           override suspend fun generateContent(
             model: String,
             apiKey: String,
@@ -576,6 +597,13 @@ class ExampleRobolectricTest {
       val jsonMedia = "application/json".toMediaType()
       val retrofitService =
         object : GeminiApiService {
+          override suspend fun generateContentWithKeyRotation(
+            model: String,
+            request: GeminiGenerateContentRequest,
+            autoRotate: String,
+          ): Response<GeminiGenerateContentResponse> =
+            generateContent(model = model, apiKey = "", request = request)
+
           override suspend fun generateContent(
             model: String,
             apiKey: String,
@@ -700,6 +728,13 @@ class ExampleRobolectricTest {
       val seenRequests = mutableListOf<Pair<String, String>>()
       val mockGeminiService =
         object : GeminiApiService {
+          override suspend fun generateContentWithKeyRotation(
+            model: String,
+            request: GeminiGenerateContentRequest,
+            autoRotate: String,
+          ): Response<GeminiGenerateContentResponse> =
+            generateContent(model = model, apiKey = "", request = request)
+
           override suspend fun generateContent(
             model: String,
             apiKey: String,
@@ -942,7 +977,11 @@ class ExampleRobolectricTest {
 
       val migratedDb =
         Room.databaseBuilder(app, BSubDatabase::class.java, dbName)
-          .addMigrations(BSubDatabase.MIGRATION_1_2, BSubDatabase.MIGRATION_2_3)
+          .addMigrations(
+            BSubDatabase.MIGRATION_1_2,
+            BSubDatabase.MIGRATION_2_3,
+            BSubDatabase.MIGRATION_3_4,
+          )
           .allowMainThreadQueries()
           .build()
 
@@ -955,6 +994,11 @@ class ExampleRobolectricTest {
         assertEquals(1_700_000_050_000L, partial.updatedAtEpochMs)
         assertEquals(HistoryTranslationStatus.COMPLETED, completed.translationStatus)
         assertEquals(1_700_000_000_000L, completed.updatedAtEpochMs)
+
+        val subtitleHistoryItems = migratedDb.subtitleHistoryDao().getAllHistory().first()
+        assertEquals(2, subtitleHistoryItems.size)
+        assertTrue(subtitleHistoryItems.any { it.originalFileName == "movie.srt" && it.status == HistoryTranslationStatus.COMPLETED })
+        assertTrue(subtitleHistoryItems.any { it.originalFileName == "ep1.srt" && it.status == HistoryTranslationStatus.PARTIAL })
       } finally {
         migratedDb.close()
         app.deleteDatabase(dbName)
@@ -1027,5 +1071,146 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("history_filter_completed").performClick()
     composeTestRule.onNodeWithText("Source: Dune.Part.One.srt").assertIsDisplayed()
     composeTestRule.onNodeWithText("Source: Broken_File.srt").assertDoesNotExist()
+  }
+
+  @Test
+  fun `gemini key rotation interceptor rotates through keys on 429 and 401 via retrofit`() =
+    runBlocking {
+      app.secureKeyStorage.clearAllKeys()
+      val key1 = "AIzaSyInterceptorKeyOne_12345"
+      val key2 = "AIzaSyInterceptorKeyTwo_12345"
+      val key3 = "AIzaSyInterceptorKeyThree_123"
+      app.secureKeyStorage.addSingleKey(key1, "QuotaKey")
+      app.secureKeyStorage.addSingleKey(key2, "InvalidKey")
+      app.secureKeyStorage.addSingleKey(key3, "HealthyKey")
+      app.secureKeyStorage.setActiveKeyIndex(0)
+
+      val attemptedKeys = mutableListOf<String>()
+      val sawInternalHeader = mutableListOf<Boolean>()
+      val mockTransportInterceptor = Interceptor { chain ->
+        val req = chain.request()
+        val keyParam = req.url.queryParameter("key").orEmpty()
+        attemptedKeys.add(keyParam)
+        sawInternalHeader.add(req.header(GeminiKeyRotationInterceptor.HEADER_AUTO_ROTATE) != null)
+
+        when (keyParam) {
+          key1 ->
+            OkHttpResponse.Builder()
+              .request(req)
+              .protocol(Protocol.HTTP_1_1)
+              .code(429)
+              .message("Too Many Requests")
+              .body(
+                """{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota limit exceeded"}}"""
+                  .toResponseBody("application/json".toMediaType())
+              )
+              .build()
+          key2 ->
+            OkHttpResponse.Builder()
+              .request(req)
+              .protocol(Protocol.HTTP_1_1)
+              .code(401)
+              .message("Unauthorized")
+              .body(
+                """{"error":{"code":401,"status":"API_KEY_INVALID","message":"API key not valid"}}"""
+                  .toResponseBody("application/json".toMediaType())
+              )
+              .build()
+          key3 ->
+            OkHttpResponse.Builder()
+              .request(req)
+              .protocol(Protocol.HTTP_1_1)
+              .code(200)
+              .message("OK")
+              .body(
+                """{"candidates":[{"content":{"parts":[{"text":"1\n00:00:01,000 --> 00:00:02,000\nহ্যালো বিশ্ব"}]},"finishReason":"STOP"}]}"""
+                  .toResponseBody("application/json".toMediaType())
+              )
+              .build()
+          else -> error("Unexpected API key: $keyParam")
+        }
+      }
+
+      val client =
+        GeminiApiClient(
+          keyStorage = app.secureKeyStorage,
+          extraInterceptors = listOf(mockTransportInterceptor),
+        )
+
+      val result =
+        client.translateBatchWithInterceptorRotation(
+          model = "gemini-2.5-flash",
+          temperature = 0.2f,
+          thinkingBudget = 0,
+          systemPrompt = "Translate to Bengali",
+          fewShotExamples = emptyList(),
+          inputMode = InputMode.MOVIE,
+          title = "Demo",
+          secondaryMeta = "2026",
+          batchSrtPayload = "1\n00:00:01,000 --> 00:00:02,000\nHello world",
+          batchIndex = 1,
+          totalBatches = 1,
+          fileName = "demo.srt",
+        )
+
+      assertTrue(result is GeminiCallResult.Success)
+      assertTrue((result as GeminiCallResult.Success).translatedText.contains("হ্যালো বিশ্ব"))
+      assertEquals(listOf(key1, key2, key3), attemptedKeys)
+      assertTrue(sawInternalHeader.none { it })
+
+      val keysAfter = app.secureKeyStorage.getKeysSnapshot()
+      assertEquals(ApiKeyStatus.QUOTA_EXHAUSTED, keysAfter[0].status)
+      assertEquals(ApiKeyStatus.INVALID, keysAfter[1].status)
+      assertEquals(ApiKeyStatus.ACTIVE, keysAfter[2].status)
+      assertEquals(2, app.secureKeyStorage.getActiveKeyIndex())
+    }
+
+  @Test
+  fun `subtitle history entity and dao insert update search and query by status`() = runBlocking {
+    val dao = db.subtitleHistoryDao()
+    val repo = SubtitleHistoryRepository(dao)
+
+    val rowId =
+      repo.insert(
+        SubtitleHistory(
+          originalFileName = "Interstellar.2014.srt",
+          outputFileName = "Interstellar.2014_BSub.srt",
+          mode = InputMode.MOVIE.name,
+          titleMetadata = "Interstellar (2014)",
+          totalBlocks = 850,
+          translatedBlocks = 0,
+          totalLines = 1900,
+          modelUsed = "gemini-2.5-flash",
+          status = HistoryTranslationStatus.PROCESSING,
+          processedAtEpochMs = 1_700_000_000_000L,
+        )
+      )
+
+    val inserted = repo.getById(rowId)!!
+    assertEquals("Interstellar.2014.srt", inserted.originalFileName)
+    assertEquals(HistoryTranslationStatus.PROCESSING, inserted.status)
+
+    repo.updateProcessingResult(
+      id = rowId,
+      status = HistoryTranslationStatus.COMPLETED,
+      statusLabel = "Completed",
+      translatedBlocks = 850,
+      outputFileName = "Interstellar.2014_BSub.srt",
+      savedPath = "Downloads/BSub Translator/Interstellar.2014_BSub.srt",
+      fileSizeBytes = 38_400L,
+      updatedAtEpochMs = 1_700_000_050_000L,
+    )
+
+    val completedRows = repo.observeByStatus(HistoryTranslationStatus.COMPLETED).first()
+    assertEquals(1, completedRows.size)
+    assertEquals(850, completedRows[0].translatedBlocks)
+    assertEquals(1_700_000_050_000L, completedRows[0].updatedAtEpochMs)
+
+    val matchedByName = repo.searchByFileName("Interstellar").first()
+    assertEquals(1, matchedByName.size)
+    assertEquals(1, repo.totalCount.first())
+
+    repo.deleteById(rowId)
+    assertEquals(0, repo.totalCount.first())
   }
 }

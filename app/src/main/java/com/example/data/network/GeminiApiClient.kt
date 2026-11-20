@@ -1,5 +1,6 @@
 package com.example.data.network
 
+import com.example.data.preferences.SecureKeyStorage
 import com.example.domain.model.FewShotExample
 import com.example.domain.model.InputMode
 import com.squareup.moshi.Moshi
@@ -11,8 +12,10 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import org.json.JSONObject
+import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
@@ -28,10 +31,19 @@ sealed class GeminiCallResult {
 
 class GeminiApiClient(
   customService: GeminiApiService? = null,
+  keyStorage: SecureKeyStorage? = null,
+  keyRotationInterceptor: Interceptor? = keyStorage?.let { GeminiKeyRotationInterceptor(it) },
+  extraInterceptors: List<Interceptor> = emptyList(),
 ) {
 
   private val okHttpClient: OkHttpClient =
     OkHttpClient.Builder()
+      .apply {
+        if (keyRotationInterceptor != null) {
+          addInterceptor(keyRotationInterceptor)
+        }
+        extraInterceptors.forEach { addInterceptor(it) }
+      }
       .connectTimeout(30, TimeUnit.SECONDS)
       .readTimeout(240, TimeUnit.SECONDS)
       .writeTimeout(60, TimeUnit.SECONDS)
@@ -114,6 +126,76 @@ class GeminiApiClient(
         GeminiCallResult.RetryableError("Unexpected error: ${e.message ?: "Unknown failure"}")
       }
     }
+
+  suspend fun translateBatchWithInterceptorRotation(
+    model: String,
+    temperature: Float,
+    thinkingBudget: Int,
+    systemPrompt: String,
+    fewShotExamples: List<FewShotExample>,
+    inputMode: InputMode,
+    title: String,
+    secondaryMeta: String,
+    batchSrtPayload: String,
+    batchIndex: Int,
+    totalBatches: Int,
+    fileName: String,
+  ): GeminiCallResult =
+    withContext(Dispatchers.IO) {
+      val cleanModel = model.trim().removePrefix("models/")
+      val requestBody =
+        buildRequestBody(
+          systemPrompt = systemPrompt,
+          fewShotExamples = fewShotExamples,
+          inputMode = inputMode,
+          title = title,
+          secondaryMeta = secondaryMeta,
+          batchSrtPayload = batchSrtPayload,
+          batchIndex = batchIndex,
+          totalBatches = totalBatches,
+          fileName = fileName,
+          temperature = temperature,
+          thinkingBudget = thinkingBudget,
+        )
+      executeGeminiCall {
+        apiService.generateContentWithKeyRotation(
+          model = cleanModel,
+          request = requestBody,
+        )
+      }
+    }
+
+  private suspend inline fun executeGeminiCall(
+    call: () -> Response<GeminiGenerateContentResponse>
+  ): GeminiCallResult {
+    return try {
+      val response = call()
+      if (response.isSuccessful) {
+        val extracted = extractCandidateText(response.body())
+        if (extracted.isNullOrBlank()) {
+          GeminiCallResult.RetryableError(
+            reason = "Empty response returned by Gemini API",
+            httpCode = response.code(),
+          )
+        } else {
+          GeminiCallResult.Success(extracted)
+        }
+      } else {
+        val errorPayload = response.errorBody()?.string().orEmpty()
+        classifyHttpFailure(response.code(), errorPayload)
+      }
+    } catch (cancel: CancellationException) {
+      throw cancel
+    } catch (e: SocketTimeoutException) {
+      GeminiCallResult.RetryableError("Network timeout: ${e.message ?: "Request timed out"}")
+    } catch (e: UnknownHostException) {
+      GeminiCallResult.RetryableError("Network error: Unable to reach Gemini API")
+    } catch (e: IOException) {
+      GeminiCallResult.RetryableError("Network error: ${e.message ?: "Connection failed"}")
+    } catch (e: Exception) {
+      GeminiCallResult.RetryableError("Unexpected error: ${e.message ?: "Unknown failure"}")
+    }
+  }
 
   internal fun buildRequestBody(
     systemPrompt: String,

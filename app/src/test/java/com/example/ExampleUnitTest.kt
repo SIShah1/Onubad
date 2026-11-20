@@ -176,6 +176,13 @@ class ExampleUnitTest {
 
       val fakeService =
         object : com.example.data.network.GeminiApiService {
+          override suspend fun generateContentWithKeyRotation(
+            model: String,
+            request: com.example.data.network.GeminiGenerateContentRequest,
+            autoRotate: String,
+          ): retrofit2.Response<com.example.data.network.GeminiGenerateContentResponse> =
+            generateContent(model = model, apiKey = "", request = request)
+
           override suspend fun generateContent(
             model: String,
             apiKey: String,

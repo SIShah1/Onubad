@@ -2,7 +2,10 @@ package com.example.data.local
 
 import kotlinx.coroutines.flow.Flow
 
-class HistoryRepository(private val dao: TranslationHistoryDao) {
+class HistoryRepository(
+  private val dao: TranslationHistoryDao,
+  private val subtitleHistoryDao: SubtitleHistoryDao? = null,
+) {
   val historyItems: Flow<List<TranslationHistoryEntity>> = dao.getAllHistory()
 
   val totalCount: Flow<Int> = dao.observeTotalCount()
@@ -21,11 +24,14 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
   suspend fun getById(id: Long): TranslationHistoryEntity? = dao.getById(id)
 
   suspend fun saveRecord(record: TranslationHistoryEntity): Long {
-    return dao.insertHistory(record)
+    val insertedId = dao.insertHistory(record)
+    subtitleHistoryDao?.insert(record.toSubtitleHistory(idOverride = insertedId))
+    return insertedId
   }
 
   suspend fun updateRecord(record: TranslationHistoryEntity) {
     dao.updateHistory(record)
+    subtitleHistoryDao?.insert(record.toSubtitleHistory())
   }
 
   suspend fun createProcessingRecord(
@@ -38,7 +44,7 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
     modelUsed: String,
     nowEpochMs: Long = System.currentTimeMillis(),
   ): Long {
-    return dao.insertHistory(
+    val entity =
       TranslationHistoryEntity(
         originalFileName = originalFileName,
         outputFileName = expectedOutputFileName,
@@ -54,7 +60,9 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
         createdAtEpochMs = nowEpochMs,
         updatedAtEpochMs = nowEpochMs,
       )
-    )
+    val insertedId = dao.insertHistory(entity)
+    subtitleHistoryDao?.insert(entity.toSubtitleHistory(idOverride = insertedId))
+    return insertedId
   }
 
   suspend fun updateBatchProgress(
@@ -67,6 +75,14 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
       translatedBlocks = translatedBlocks,
       updatedAtEpochMs = updatedAtEpochMs,
     )
+    subtitleHistoryDao?.getById(historyId)?.let { existing ->
+      subtitleHistoryDao.update(
+        existing.copy(
+          translatedBlocks = translatedBlocks,
+          updatedAtEpochMs = updatedAtEpochMs,
+        )
+      )
+    }
   }
 
   suspend fun markCompleted(
@@ -92,6 +108,19 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
       errorMessage = null,
       updatedAtEpochMs = updatedAtEpochMs,
     )
+    subtitleHistoryDao?.updateProcessingResult(
+      id = historyId,
+      status = HistoryTranslationStatus.COMPLETED,
+      statusLabel = HistoryTranslationStatus.COMPLETED.label,
+      translatedBlocks = translatedBlocks,
+      outputFileName = outputFileName,
+      savedPath = savedPath,
+      contentUri = contentUri,
+      localBackupPath = localBackupPath,
+      fileSizeBytes = fileSizeBytes,
+      errorMessage = null,
+      updatedAtEpochMs = updatedAtEpochMs,
+    )
   }
 
   suspend fun markPartial(
@@ -106,6 +135,7 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
     reason: String? = null,
     updatedAtEpochMs: Long = System.currentTimeMillis(),
   ) {
+    val label = "Partial ($translatedBlocks/$totalBlocks)"
     dao.updateOutcome(
       id = historyId,
       outputFileName = outputFileName,
@@ -114,8 +144,21 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
       localBackupPath = localBackupPath,
       translatedBlocks = translatedBlocks,
       fileSizeBytes = fileSizeBytes,
-      status = "Partial ($translatedBlocks/$totalBlocks)",
+      status = label,
       translationStatus = HistoryTranslationStatus.PARTIAL,
+      errorMessage = reason,
+      updatedAtEpochMs = updatedAtEpochMs,
+    )
+    subtitleHistoryDao?.updateProcessingResult(
+      id = historyId,
+      status = HistoryTranslationStatus.PARTIAL,
+      statusLabel = label,
+      translatedBlocks = translatedBlocks,
+      outputFileName = outputFileName,
+      savedPath = savedPath,
+      contentUri = contentUri,
+      localBackupPath = localBackupPath,
+      fileSizeBytes = fileSizeBytes,
       errorMessage = reason,
       updatedAtEpochMs = updatedAtEpochMs,
     )
@@ -129,16 +172,35 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
     updatedAtEpochMs: Long = System.currentTimeMillis(),
   ) {
     val existing = dao.getById(historyId)
+    val outputFileName = existing?.outputFileName.orEmpty()
+    val savedPath = existing?.savedPath.orEmpty()
+    val contentUri = existing?.contentUri.orEmpty()
+    val localBackupPath = existing?.localBackupPath.orEmpty()
+    val fileSizeBytes = existing?.fileSizeBytes ?: 0L
+
     dao.updateOutcome(
       id = historyId,
-      outputFileName = existing?.outputFileName.orEmpty(),
-      savedPath = existing?.savedPath.orEmpty(),
-      contentUri = existing?.contentUri.orEmpty(),
-      localBackupPath = existing?.localBackupPath.orEmpty(),
+      outputFileName = outputFileName,
+      savedPath = savedPath,
+      contentUri = contentUri,
+      localBackupPath = localBackupPath,
       translatedBlocks = translatedBlocks,
-      fileSizeBytes = existing?.fileSizeBytes ?: 0L,
+      fileSizeBytes = fileSizeBytes,
       status = status.label,
       translationStatus = status,
+      errorMessage = errorMessage,
+      updatedAtEpochMs = updatedAtEpochMs,
+    )
+    subtitleHistoryDao?.updateProcessingResult(
+      id = historyId,
+      status = status,
+      statusLabel = status.label,
+      translatedBlocks = translatedBlocks,
+      outputFileName = outputFileName,
+      savedPath = savedPath,
+      contentUri = contentUri,
+      localBackupPath = localBackupPath,
+      fileSizeBytes = fileSizeBytes,
       errorMessage = errorMessage,
       updatedAtEpochMs = updatedAtEpochMs,
     )
@@ -146,9 +208,35 @@ class HistoryRepository(private val dao: TranslationHistoryDao) {
 
   suspend fun deleteRecord(id: Long) {
     dao.deleteById(id)
+    subtitleHistoryDao?.deleteById(id)
   }
 
   suspend fun clearAll() {
     dao.deleteAll()
+    subtitleHistoryDao?.deleteAll()
   }
+
+  private fun TranslationHistoryEntity.toSubtitleHistory(
+    idOverride: Long = id,
+  ): SubtitleHistory =
+    SubtitleHistory(
+      id = idOverride,
+      originalFileName = originalFileName,
+      outputFileName = outputFileName,
+      savedPath = savedPath,
+      contentUri = contentUri,
+      localBackupPath = localBackupPath,
+      mode = mode,
+      titleMetadata = titleMetadata,
+      totalBlocks = totalBlocks,
+      translatedBlocks = translatedBlocks,
+      totalLines = totalLines,
+      fileSizeBytes = fileSizeBytes,
+      modelUsed = modelUsed,
+      status = translationStatus,
+      statusLabel = status,
+      processedAtEpochMs = createdAtEpochMs,
+      updatedAtEpochMs = updatedAtEpochMs,
+      errorMessage = errorMessage,
+    )
 }

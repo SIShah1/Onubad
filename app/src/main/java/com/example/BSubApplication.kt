@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.annotation.VisibleForTesting
 import com.example.data.local.BSubDatabase
 import com.example.data.local.HistoryRepository
+import com.example.data.local.SubtitleHistoryRepository
 import com.example.data.local.SubtitleTranslationRepository
 import com.example.data.network.ApiKeyRotationManager
 import com.example.data.network.GeminiApiClient
@@ -24,7 +25,13 @@ class BSubApplication : Application() {
 
   val database: BSubDatabase by lazy { BSubDatabase.getInstance(this) }
   val historyRepository: HistoryRepository by lazy {
-    HistoryRepository(database.translationHistoryDao())
+    HistoryRepository(
+      dao = database.translationHistoryDao(),
+      subtitleHistoryDao = database.subtitleHistoryDao(),
+    )
+  }
+  val subtitleHistoryRepository: SubtitleHistoryRepository by lazy {
+    SubtitleHistoryRepository(database.subtitleHistoryDao())
   }
   val subtitleTranslationRepository: SubtitleTranslationRepository by lazy {
     SubtitleTranslationRepository(database.subtitleTranslationDao())
@@ -32,7 +39,7 @@ class BSubApplication : Application() {
   val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
   val secureKeyStorage: SecureKeyStorage by lazy { SecureKeyStorage(this) }
   val subtitleFileStorage: SubtitleFileStorage by lazy { SubtitleFileStorage(this) }
-  val geminiApiClient: GeminiApiClient by lazy { GeminiApiClient() }
+  val geminiApiClient: GeminiApiClient by lazy { GeminiApiClient(keyStorage = secureKeyStorage) }
   val apiKeyRotationManager: ApiKeyRotationManager by lazy {
     ApiKeyRotationManager(
       keyStorage = secureKeyStorage,

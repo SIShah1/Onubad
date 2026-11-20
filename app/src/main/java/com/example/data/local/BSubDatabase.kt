@@ -9,8 +9,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-  entities = [TranslationHistoryEntity::class, SubtitleTranslation::class],
-  version = 3,
+  entities = [TranslationHistoryEntity::class, SubtitleTranslation::class, SubtitleHistory::class],
+  version = 4,
   exportSchema = false,
 )
 @TypeConverters(SubtitleTranslationConverters::class, HistoryConverters::class)
@@ -18,6 +18,8 @@ abstract class BSubDatabase : RoomDatabase() {
   abstract fun translationHistoryDao(): TranslationHistoryDao
 
   abstract fun subtitleTranslationDao(): SubtitleTranslationDao
+
+  abstract fun subtitleHistoryDao(): SubtitleHistoryDao
 
   companion object {
     @Volatile private var instance: BSubDatabase? = null
@@ -80,6 +82,58 @@ abstract class BSubDatabase : RoomDatabase() {
         }
       }
 
+    val MIGRATION_3_4 =
+      object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `subtitle_history` (
+              `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+              `originalFileName` TEXT NOT NULL,
+              `outputFileName` TEXT NOT NULL,
+              `savedPath` TEXT NOT NULL,
+              `contentUri` TEXT NOT NULL,
+              `localBackupPath` TEXT NOT NULL,
+              `mode` TEXT NOT NULL,
+              `titleMetadata` TEXT NOT NULL,
+              `totalBlocks` INTEGER NOT NULL,
+              `translatedBlocks` INTEGER NOT NULL,
+              `totalLines` INTEGER NOT NULL,
+              `fileSizeBytes` INTEGER NOT NULL,
+              `modelUsed` TEXT NOT NULL,
+              `status` TEXT NOT NULL,
+              `statusLabel` TEXT NOT NULL,
+              `processedAtEpochMs` INTEGER NOT NULL,
+              `updatedAtEpochMs` INTEGER NOT NULL,
+              `errorMessage` TEXT
+            )
+            """.trimIndent()
+          )
+          db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_subtitle_history_status_processedAtEpochMs` ON `subtitle_history` (`status`, `processedAtEpochMs`)"
+          )
+          db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_subtitle_history_originalFileName` ON `subtitle_history` (`originalFileName`)"
+          )
+          db.execSQL(
+            """
+            INSERT INTO `subtitle_history` (
+              `originalFileName`, `outputFileName`, `savedPath`, `contentUri`, `localBackupPath`,
+              `mode`, `titleMetadata`, `totalBlocks`, `translatedBlocks`, `totalLines`,
+              `fileSizeBytes`, `modelUsed`, `status`, `statusLabel`, `processedAtEpochMs`,
+              `updatedAtEpochMs`, `errorMessage`
+            )
+            SELECT
+              `originalFileName`, `outputFileName`, `savedPath`, `contentUri`, `localBackupPath`,
+              `mode`, `titleMetadata`, `totalBlocks`, `translatedBlocks`, `totalLines`,
+              `fileSizeBytes`, `modelUsed`, `translationStatus`, `status`, `createdAtEpochMs`,
+              `updatedAtEpochMs`, `errorMessage`
+            FROM `translation_history`
+            """.trimIndent()
+          )
+        }
+      }
+
     fun getInstance(context: Context): BSubDatabase {
       return instance
         ?: synchronized(this) {
@@ -89,7 +143,7 @@ abstract class BSubDatabase : RoomDatabase() {
                 BSubDatabase::class.java,
                 "bsub_translator.db",
               )
-              .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+              .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
               .build()
               .also { instance = it }
         }
