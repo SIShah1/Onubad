@@ -10,10 +10,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
   entities = [TranslationHistoryEntity::class, SubtitleTranslation::class],
-  version = 2,
+  version = 3,
   exportSchema = false,
 )
-@TypeConverters(SubtitleTranslationConverters::class)
+@TypeConverters(SubtitleTranslationConverters::class, HistoryConverters::class)
 abstract class BSubDatabase : RoomDatabase() {
   abstract fun translationHistoryDao(): TranslationHistoryDao
 
@@ -46,6 +46,40 @@ abstract class BSubDatabase : RoomDatabase() {
         }
       }
 
+    val MIGRATION_2_3 =
+      object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          db.execSQL(
+            "ALTER TABLE `translation_history` ADD COLUMN `translationStatus` TEXT NOT NULL DEFAULT 'COMPLETED'"
+          )
+          db.execSQL(
+            "ALTER TABLE `translation_history` ADD COLUMN `updatedAtEpochMs` INTEGER NOT NULL DEFAULT 0"
+          )
+          db.execSQL(
+            "ALTER TABLE `translation_history` ADD COLUMN `errorMessage` TEXT"
+          )
+          db.execSQL(
+            """
+            UPDATE `translation_history`
+            SET `translationStatus` = CASE
+              WHEN LOWER(`status`) LIKE 'partial%' THEN 'PARTIAL'
+              WHEN LOWER(`status`) LIKE 'fail%' THEN 'FAILED'
+              WHEN LOWER(`status`) LIKE 'abort%' THEN 'ABORTED'
+              WHEN LOWER(`status`) LIKE 'process%' THEN 'PROCESSING'
+              ELSE 'COMPLETED'
+            END,
+            `updatedAtEpochMs` = CASE
+              WHEN `updatedAtEpochMs` = 0 THEN `createdAtEpochMs`
+              ELSE `updatedAtEpochMs`
+            END
+            """.trimIndent()
+          )
+          db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_translation_history_translationStatus_createdAtEpochMs` ON `translation_history` (`translationStatus`, `createdAtEpochMs`)"
+          )
+        }
+      }
+
     fun getInstance(context: Context): BSubDatabase {
       return instance
         ?: synchronized(this) {
@@ -55,7 +89,7 @@ abstract class BSubDatabase : RoomDatabase() {
                 BSubDatabase::class.java,
                 "bsub_translator.db",
               )
-              .addMigrations(MIGRATION_1_2)
+              .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
               .build()
               .also { instance = it }
         }

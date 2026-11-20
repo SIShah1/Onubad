@@ -277,6 +277,7 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
                 onExportToUri = viewModel::exportHistoryItemToUri,
                 onCreateShareIntent = viewModel::createShareIntent,
                 onDeleteItem = viewModel::deleteHistoryItem,
+                onClearAllHistory = viewModel::clearAllHistory,
               )
             }
 

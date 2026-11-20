@@ -22,12 +22,18 @@ import androidx.work.WorkManager
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
 import androidx.work.workDataOf
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithText
 import com.example.data.local.BSubDatabase
 import com.example.data.local.FileTranslationProgress
+import com.example.data.local.HistoryRepository
+import com.example.data.local.HistoryTranslationStatus
 import com.example.data.local.RoomTranslationProgress
 import com.example.data.local.SubtitleTranslation
 import com.example.data.local.SubtitleTranslationRepository
 import com.example.data.local.SubtitleTranslationStatus
+import com.example.data.local.TranslationHistoryEntity
+import com.example.ui.screens.HistoryScreen
 import com.example.data.network.ApiKeyRotationManager
 import com.example.data.network.GeminiApiClient
 import com.example.data.network.GeminiApiService
@@ -801,4 +807,225 @@ class ExampleRobolectricTest {
       assertEquals(keyB, seenRequests[1].first)
       assertEquals(keyB, seenRequests[2].first)
     }
+
+  @Test
+  fun `room history repository tracks processing completed failed records with filenames and timestamps`() =
+    runBlocking {
+      val repo = HistoryRepository(db.translationHistoryDao())
+
+      val processingId =
+        repo.createProcessingRecord(
+          originalFileName = "Inception.2010.English.srt",
+          expectedOutputFileName = "Inception.2010.English_BSub.srt",
+          mode = InputMode.MOVIE.name,
+          titleMetadata = "Inception (2010)",
+          totalBlocks = 1200,
+          totalLines = 3100,
+          modelUsed = "gemini-2.5-flash",
+          nowEpochMs = 1_700_000_000_000L,
+        )
+
+      val initial = repo.getById(processingId)!!
+      assertEquals("Inception.2010.English.srt", initial.originalFileName)
+      assertEquals(HistoryTranslationStatus.PROCESSING, initial.translationStatus)
+      assertEquals(1_700_000_000_000L, initial.createdAtEpochMs)
+      assertEquals(1_700_000_000_000L, initial.updatedAtEpochMs)
+
+      repo.updateBatchProgress(
+        historyId = processingId,
+        translatedBlocks = 300,
+        updatedAtEpochMs = 1_700_000_030_000L,
+      )
+      assertEquals(300, repo.getById(processingId)!!.translatedBlocks)
+
+      repo.markCompleted(
+        historyId = processingId,
+        outputFileName = "Inception.2010.English_BSub.srt",
+        savedPath = "Downloads/BSub Translator/Inception.2010.English_BSub.srt",
+        contentUri = "content://downloads/1",
+        localBackupPath = "/tmp/inception_bsub.srt",
+        translatedBlocks = 1200,
+        fileSizeBytes = 42_000L,
+        updatedAtEpochMs = 1_700_000_060_000L,
+      )
+
+      val failedId =
+        repo.createProcessingRecord(
+          originalFileName = "Andor_S02E01.srt",
+          expectedOutputFileName = "Andor_S02E01_BSub.srt",
+          mode = InputMode.SERIES.name,
+          titleMetadata = "Andor • S02",
+          totalBlocks = 500,
+          totalLines = 1200,
+          modelUsed = "gemini-2.5-flash",
+          nowEpochMs = 1_700_000_100_000L,
+        )
+      repo.markFailed(
+        historyId = failedId,
+        translatedBlocks = 0,
+        errorMessage = "Quota exhausted on all keys",
+        updatedAtEpochMs = 1_700_000_120_000L,
+      )
+
+      assertEquals(2, repo.totalCount.first())
+      assertEquals(1, repo.observeCountByStatus(HistoryTranslationStatus.COMPLETED).first())
+      assertEquals(1, repo.observeCountByStatus(HistoryTranslationStatus.FAILED).first())
+
+      val completedList = repo.observeByStatus(HistoryTranslationStatus.COMPLETED).first()
+      assertEquals(1, completedList.size)
+      assertEquals("Inception.2010.English.srt", completedList[0].originalFileName)
+      assertEquals(1_700_000_060_000L, completedList[0].updatedAtEpochMs)
+
+      val searchMatches = repo.searchHistory("Andor").first()
+      assertEquals(1, searchMatches.size)
+      assertEquals(HistoryTranslationStatus.FAILED, searchMatches[0].translationStatus)
+      assertEquals("Quota exhausted on all keys", searchMatches[0].errorMessage)
+
+      repo.deleteRecord(failedId)
+      assertEquals(1, repo.totalCount.first())
+    }
+
+  @Test
+  fun `bsub database migration 2 to 3 preserves existing history and populates status and timestamp`() =
+    runBlocking {
+      val dbName = "migration_2_3_test.db"
+      app.deleteDatabase(dbName)
+      val sqlite = app.openOrCreateDatabase(dbName, Context.MODE_PRIVATE, null)
+      sqlite.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `translation_history` (
+          `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          `originalFileName` TEXT NOT NULL,
+          `outputFileName` TEXT NOT NULL,
+          `savedPath` TEXT NOT NULL,
+          `contentUri` TEXT NOT NULL,
+          `localBackupPath` TEXT NOT NULL,
+          `mode` TEXT NOT NULL,
+          `titleMetadata` TEXT NOT NULL,
+          `totalBlocks` INTEGER NOT NULL,
+          `translatedBlocks` INTEGER NOT NULL,
+          `totalLines` INTEGER NOT NULL,
+          `fileSizeBytes` INTEGER NOT NULL,
+          `modelUsed` TEXT NOT NULL,
+          `status` TEXT NOT NULL,
+          `createdAtEpochMs` INTEGER NOT NULL
+        )
+        """.trimIndent()
+      )
+      sqlite.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `subtitle_translations` (
+          `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          `jobId` TEXT NOT NULL,
+          `fileName` TEXT NOT NULL,
+          `blockIndex` INTEGER NOT NULL,
+          `timestamp` TEXT NOT NULL,
+          `originalEnglishText` TEXT NOT NULL,
+          `translatedBengaliText` TEXT,
+          `status` TEXT NOT NULL,
+          `updatedAtEpochMs` INTEGER NOT NULL
+        )
+        """.trimIndent()
+      )
+      sqlite.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_subtitle_translations_jobId_blockIndex` ON `subtitle_translations` (`jobId`, `blockIndex`)"
+      )
+      sqlite.execSQL(
+        """
+        INSERT INTO `translation_history` VALUES
+        (1, 'movie.srt', 'movie_BSub.srt', 'Downloads/movie_BSub.srt', '', '/tmp/a.srt', 'MOVIE', 'Movie', 100, 100, 250, 4096, 'gemini-2.5-flash', 'Completed', 1700000000000),
+        (2, 'ep1.srt', 'ep1_partial.srt', 'Downloads/ep1_partial.srt', '', '/tmp/b.srt', 'SERIES', 'Series', 200, 80, 500, 2048, 'gemini-2.5-flash', 'Partial (80/200)', 1700000050000)
+        """.trimIndent()
+      )
+      sqlite.version = 2
+      sqlite.close()
+
+      val migratedDb =
+        Room.databaseBuilder(app, BSubDatabase::class.java, dbName)
+          .addMigrations(BSubDatabase.MIGRATION_1_2, BSubDatabase.MIGRATION_2_3)
+          .allowMainThreadQueries()
+          .build()
+
+      try {
+        val items = migratedDb.translationHistoryDao().getAllHistory().first()
+        assertEquals(2, items.size)
+        val partial = items.first { it.id == 2L }
+        val completed = items.first { it.id == 1L }
+        assertEquals(HistoryTranslationStatus.PARTIAL, partial.translationStatus)
+        assertEquals(1_700_000_050_000L, partial.updatedAtEpochMs)
+        assertEquals(HistoryTranslationStatus.COMPLETED, completed.translationStatus)
+        assertEquals(1_700_000_000_000L, completed.updatedAtEpochMs)
+      } finally {
+        migratedDb.close()
+        app.deleteDatabase(dbName)
+      }
+    }
+
+  @Test
+  fun `history screen displays original filenames timestamps and filters by status`() {
+    val sampleItems =
+      listOf(
+        TranslationHistoryEntity(
+          id = 1L,
+          originalFileName = "Dune.Part.One.srt",
+          outputFileName = "Dune.Part.One_BSub.srt",
+          savedPath = "Downloads/BSub Translator/Dune.Part.One_BSub.srt",
+          localBackupPath = "/tmp/dune.srt",
+          mode = "MOVIE",
+          titleMetadata = "Dune (2021)",
+          totalBlocks = 100,
+          translatedBlocks = 100,
+          totalLines = 220,
+          fileSizeBytes = 5000L,
+          modelUsed = "gemini-2.5-flash",
+          status = "Completed",
+          translationStatus = HistoryTranslationStatus.COMPLETED,
+          createdAtEpochMs = 1_700_000_000_000L,
+          updatedAtEpochMs = 1_700_000_050_000L,
+        ),
+        TranslationHistoryEntity(
+          id = 2L,
+          originalFileName = "Broken_File.srt",
+          outputFileName = "",
+          mode = "MOVIE",
+          titleMetadata = "Broken Movie",
+          totalBlocks = 50,
+          translatedBlocks = 0,
+          totalLines = 100,
+          fileSizeBytes = 0L,
+          modelUsed = "gemini-2.5-flash",
+          status = "Failed",
+          translationStatus = HistoryTranslationStatus.FAILED,
+          errorMessage = "Network timeout",
+          createdAtEpochMs = 1_700_000_100_000L,
+          updatedAtEpochMs = 1_700_000_110_000L,
+        ),
+      )
+
+    composeTestRule.setContent {
+      BSubTranslatorTheme {
+        HistoryScreen(
+          historyItems = sampleItems,
+          previewState = null,
+          onOpenPreview = {},
+          onClosePreview = {},
+          onReSaveToDownloads = {},
+          onExportToUri = { _, _ -> },
+          onCreateShareIntent = { null },
+          onDeleteItem = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithText("Source: Dune.Part.One.srt").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("history_filter_failed").performClick()
+    composeTestRule.onNodeWithText("Source: Broken_File.srt").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Network timeout").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Source: Dune.Part.One.srt").assertDoesNotExist()
+
+    composeTestRule.onNodeWithTag("history_filter_completed").performClick()
+    composeTestRule.onNodeWithText("Source: Dune.Part.One.srt").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Source: Broken_File.srt").assertDoesNotExist()
+  }
 }

@@ -1,6 +1,7 @@
 package com.example.service
 
 import com.example.data.local.HistoryRepository
+import com.example.data.local.HistoryTranslationStatus
 import com.example.data.local.SubtitleTranslationRepository
 import com.example.data.local.TranslationHistoryEntity
 import com.example.data.network.ApiKeyRotationManager
@@ -292,7 +293,26 @@ class TranslationCoordinator(
         )
       }
 
+      val titleMeta = buildTitleMetadata(request)
+      val expectedOutputName = SrtEngine.buildOutputFileName(file.fileName, settings)
+
       if (segmentedPlan.isEmpty) {
+        historyRepository.saveRecord(
+          TranslationHistoryEntity(
+            originalFileName = file.fileName,
+            outputFileName = expectedOutputName,
+            mode = request.inputMode.name,
+            titleMetadata = titleMeta,
+            totalBlocks = file.totalBlocks,
+            translatedBlocks = 0,
+            totalLines = file.totalLines,
+            fileSizeBytes = 0L,
+            modelUsed = settings.effectiveModel,
+            status = HistoryTranslationStatus.FAILED.label,
+            translationStatus = HistoryTranslationStatus.FAILED,
+            errorMessage = "Skipped: no valid SRT subtitle blocks detected",
+          )
+        )
         appendLog(
           "File $displayFileNum/$totalFiles – Skipped (no valid SRT blocks)",
           LogLevel.WARNING,
@@ -300,6 +320,17 @@ class TranslationCoordinator(
         _sessionState.update { it.copy(completedFiles = displayFileNum) }
         continue
       }
+
+      val historyId =
+        historyRepository.createProcessingRecord(
+          originalFileName = file.fileName,
+          expectedOutputFileName = expectedOutputName,
+          mode = request.inputMode.name,
+          titleMetadata = titleMeta,
+          totalBlocks = file.totalBlocks,
+          totalLines = file.totalLines,
+          modelUsed = settings.effectiveModel,
+        )
 
       val preSeededId = request.preSeededJobIds[file.id]
       val fileJobId = preSeededId ?: "${System.currentTimeMillis()}_${file.id}"
@@ -362,11 +393,14 @@ class TranslationCoordinator(
               is RotationExecutionResult.Success -> rotationResult.value
               is RotationExecutionResult.Failure -> {
                 // Preserve any validated batches completed so far for this file
-                savePartialIfNeeded(
+                finalizeIncompleteHistory(
+                  historyId = historyId,
                   file = file,
                   translatedBlocks = translatedFileBlocks,
                   request = request,
                   settings = settings,
+                  failureStatus = HistoryTranslationStatus.FAILED,
+                  reason = rotationResult.fatalError,
                 )
                 appendLog(rotationResult.fatalError, LogLevel.ERROR)
                 TranslationLogger.logWorkerError(
@@ -388,6 +422,10 @@ class TranslationCoordinator(
             jobId = fileJobId,
             translatedBlocks = validatedBlocks,
           )
+          historyRepository.updateBatchProgress(
+            historyId = historyId,
+            translatedBlocks = translatedFileBlocks.size,
+          )
           completedBlocksAllFiles += validatedBlocks.size
 
           appendLog("Batch $displayBatchNum/$totalBatches – Completed", LogLevel.SUCCESS)
@@ -399,11 +437,14 @@ class TranslationCoordinator(
           }
         }
       } catch (cancel: CancellationException) {
-        savePartialIfNeeded(
+        finalizeIncompleteHistory(
+          historyId = historyId,
           file = file,
           translatedBlocks = translatedFileBlocks,
           request = request,
           settings = settings,
+          failureStatus = HistoryTranslationStatus.ABORTED,
+          reason = cancel.message ?: "Aborted by user",
         )
         throw cancel
       }
@@ -415,26 +456,16 @@ class TranslationCoordinator(
           translatedBlocks = translatedFileBlocks,
           strictTimecodeCheck = true,
         )
-      val outputName = SrtEngine.buildOutputFileName(file.fileName, settings)
-      val savedOutput = fileStorage.saveTranslatedSrt(outputName, formattedSrt)
+      val savedOutput = fileStorage.saveTranslatedSrt(expectedOutputName, formattedSrt)
 
-      val titleMeta = buildTitleMetadata(request)
-      historyRepository.saveRecord(
-        TranslationHistoryEntity(
-          originalFileName = file.fileName,
-          outputFileName = savedOutput.outputFileName,
-          savedPath = savedOutput.displayPath,
-          contentUri = savedOutput.contentUri,
-          localBackupPath = savedOutput.localBackupPath,
-          mode = request.inputMode.name,
-          titleMetadata = titleMeta,
-          totalBlocks = file.totalBlocks,
-          translatedBlocks = translatedFileBlocks.size,
-          totalLines = file.totalLines,
-          fileSizeBytes = savedOutput.fileSizeBytes,
-          modelUsed = settings.effectiveModel,
-          status = "Completed",
-        )
+      historyRepository.markCompleted(
+        historyId = historyId,
+        outputFileName = savedOutput.outputFileName,
+        savedPath = savedOutput.displayPath,
+        contentUri = savedOutput.contentUri,
+        localBackupPath = savedOutput.localBackupPath,
+        translatedBlocks = translatedFileBlocks.size,
+        fileSizeBytes = savedOutput.fileSizeBytes,
       )
 
       appendLog(
@@ -461,14 +492,28 @@ class TranslationCoordinator(
     }
   }
 
-  private suspend fun savePartialIfNeeded(
+  private suspend fun finalizeIncompleteHistory(
+    historyId: Long,
     file: SelectedSubtitleFile,
     translatedBlocks: List<SrtBlock>,
     request: TranslationJobRequest,
     settings: AppSettings,
+    failureStatus: HistoryTranslationStatus,
+    reason: String,
   ) {
-    if (translatedBlocks.isEmpty()) return
     withContext(NonCancellable) {
+      if (translatedBlocks.isEmpty()) {
+        runCatching {
+          historyRepository.markFailed(
+            historyId = historyId,
+            translatedBlocks = 0,
+            errorMessage = reason,
+            status = failureStatus,
+          )
+        }
+        return@withContext
+      }
+
       runCatching {
         val formattedSrt = SrtEngine.formatBlocks(translatedBlocks)
         val baseOutputName = SrtEngine.buildOutputFileName(file.fileName, settings)
@@ -479,27 +524,30 @@ class TranslationCoordinator(
             baseOutputName + "_partial.srt"
           }
         val savedOutput = fileStorage.saveTranslatedSrt(partialName, formattedSrt)
-        historyRepository.saveRecord(
-          TranslationHistoryEntity(
-            originalFileName = file.fileName,
-            outputFileName = savedOutput.outputFileName,
-            savedPath = savedOutput.displayPath,
-            contentUri = savedOutput.contentUri,
-            localBackupPath = savedOutput.localBackupPath,
-            mode = request.inputMode.name,
-            titleMetadata = buildTitleMetadata(request),
-            totalBlocks = file.totalBlocks,
-            translatedBlocks = translatedBlocks.size,
-            totalLines = file.totalLines,
-            fileSizeBytes = savedOutput.fileSizeBytes,
-            modelUsed = settings.effectiveModel,
-            status = "Partial (${translatedBlocks.size}/${file.totalBlocks})",
-          )
+        historyRepository.markPartial(
+          historyId = historyId,
+          outputFileName = savedOutput.outputFileName,
+          savedPath = savedOutput.displayPath,
+          contentUri = savedOutput.contentUri,
+          localBackupPath = savedOutput.localBackupPath,
+          translatedBlocks = translatedBlocks.size,
+          totalBlocks = file.totalBlocks,
+          fileSizeBytes = savedOutput.fileSizeBytes,
+          reason = reason,
         )
         appendLog(
           "Preserved ${translatedBlocks.size} validated blocks in ${savedOutput.outputFileName}",
           LogLevel.INFO,
         )
+      }.onFailure {
+        runCatching {
+          historyRepository.markFailed(
+            historyId = historyId,
+            translatedBlocks = translatedBlocks.size,
+            errorMessage = reason,
+            status = failureStatus,
+          )
+        }
       }
     }
   }
