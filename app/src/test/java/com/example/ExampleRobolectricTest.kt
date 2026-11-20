@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -626,4 +627,18 @@ class ExampleRobolectricTest {
       assertEquals(2, nextSession.currentIndex)
       assertTrue(1 in nextSession.invalidIndices)
     }
+
+  @Test
+  fun `notification foreground info uses monochrome clover app icon drawable`() = runBlocking {
+    val drawable = ContextCompat.getDrawable(app, R.drawable.ic_notification_app_icon)
+    assertTrue("Expected ic_notification_app_icon drawable to load", drawable != null)
+
+    val worker = TestListenableWorkerBuilder<SubtitleTranslationWorker>(app).build()
+    val foregroundInfo = worker.getForegroundInfo()
+    assertEquals(
+      R.drawable.ic_notification_app_icon,
+      foregroundInfo.notification.smallIcon.resId,
+    )
+    assertEquals(0xFF006D5B.toInt(), foregroundInfo.notification.color)
+  }
 }

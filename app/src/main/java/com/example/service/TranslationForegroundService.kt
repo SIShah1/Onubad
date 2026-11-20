@@ -149,7 +149,8 @@ class TranslationForegroundService : Service() {
     val indeterminate = state.totalBlocksAllFiles <= 0
 
     return NotificationCompat.Builder(this, CHANNEL_ID)
-      .setSmallIcon(R.drawable.ic_subtitles_notification)
+      .setSmallIcon(R.drawable.ic_notification_app_icon)
+      .setColor(0xFF006D5B.toInt())
       .setContentTitle(titleText)
       .setContentText(bodyText)
       .setStyle(NotificationCompat.BigTextStyle().bigText("$bodyText\n${state.currentFileName}"))
@@ -193,7 +194,8 @@ class TranslationForegroundService : Service() {
       }
 
     return NotificationCompat.Builder(this, CHANNEL_ID)
-      .setSmallIcon(R.drawable.ic_subtitles_notification)
+      .setSmallIcon(R.drawable.ic_notification_app_icon)
+      .setColor(0xFF006D5B.toInt())
       .setContentTitle(title)
       .setContentText(body)
       .setContentIntent(openAppPendingIntent)
