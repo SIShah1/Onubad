@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -95,6 +96,11 @@ fun ApiKeysScreen(
           FilledTonalButton(
             onClick = { showAddSingleDialog = true },
             enabled = !isTranslationRunning,
+            colors =
+              ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
             modifier = Modifier.testTag("add_single_key_button"),
           ) {
             Icon(
@@ -127,8 +133,8 @@ fun ApiKeysScreen(
         if (exhaustedCount > 0) {
           StatusPill(
             text = "Exhausted: $exhaustedCount",
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
           )
         }
         if (invalidCount > 0) {
@@ -161,6 +167,7 @@ fun ApiKeysScreen(
 
           OutlinedButton(
             onClick = { showClearAllConfirm = true },
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
             modifier = Modifier.weight(1f).testTag("clear_all_keys_button"),
           ) {
             Icon(
@@ -343,8 +350,8 @@ private fun ApiKeyRow(
         )
       ApiKeyStatus.QUOTA_EXHAUSTED ->
         Triple(
-          MaterialTheme.colorScheme.primaryContainer,
-          MaterialTheme.colorScheme.onPrimaryContainer,
+          MaterialTheme.colorScheme.secondaryContainer,
+          MaterialTheme.colorScheme.onSecondaryContainer,
           "QUOTA",
         )
       ApiKeyStatus.INVALID ->
@@ -355,8 +362,8 @@ private fun ApiKeyRow(
         )
       ApiKeyStatus.COOLDOWN ->
         Triple(
-          MaterialTheme.colorScheme.secondaryContainer,
-          MaterialTheme.colorScheme.onSecondaryContainer,
+          MaterialTheme.colorScheme.errorContainer,
+          MaterialTheme.colorScheme.onErrorContainer,
           "COOLDOWN",
         )
     }

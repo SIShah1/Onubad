@@ -51,6 +51,11 @@ import com.example.logging.TranslationLogger
 import com.example.logging.WorkManagerDiagnosticTree
 import com.example.ui.screens.StudioScreen
 import com.example.ui.theme.BSubTranslatorTheme
+import com.example.ui.theme.CloverCoralTint
+import com.example.ui.theme.CloverEmerald
+import com.example.ui.theme.CloverMintAqua
+import com.example.ui.theme.CloverYellow
+import com.example.ui.theme.CloverYellowTint
 import com.example.ui.theme.LightCanvas
 import com.example.ui.theme.LocalThemeController
 import com.example.ui.theme.StudioMidnight
@@ -337,6 +342,10 @@ class ExampleRobolectricTest {
   @Test
   fun `theme provider dynamically toggles light and dark color schemes across ui segments`() {
     var observedBgColor = Color.Unspecified
+    var observedPrimaryColor = Color.Unspecified
+    var observedSecondaryColor = Color.Unspecified
+    var observedSecondaryContainer = Color.Unspecified
+    var observedErrorContainer = Color.Unspecified
     var observedIsDark = true
 
     composeTestRule.setContent {
@@ -347,6 +356,10 @@ class ExampleRobolectricTest {
         animateTransitions = false,
       ) {
         observedBgColor = MaterialTheme.colorScheme.background
+        observedPrimaryColor = MaterialTheme.colorScheme.primary
+        observedSecondaryColor = MaterialTheme.colorScheme.secondary
+        observedSecondaryContainer = MaterialTheme.colorScheme.secondaryContainer
+        observedErrorContainer = MaterialTheme.colorScheme.errorContainer
         observedIsDark = LocalThemeController.current.isDarkTheme
         StudioScreen(
           formState = StudioFormState(),
@@ -374,6 +387,8 @@ class ExampleRobolectricTest {
     composeTestRule.waitForIdle()
     assertTrue(observedIsDark)
     assertEquals(StudioMidnight, observedBgColor)
+    assertEquals(CloverMintAqua, observedPrimaryColor)
+    assertEquals(CloverYellow, observedSecondaryColor)
     composeTestRule.onNodeWithTag("hero_theme_toggle_chip").assertTextContains("Dark")
 
     composeTestRule.onNodeWithTag("hero_theme_toggle_chip").performClick()
@@ -381,6 +396,9 @@ class ExampleRobolectricTest {
 
     assertEquals(false, observedIsDark)
     assertEquals(LightCanvas, observedBgColor)
+    assertEquals(CloverEmerald, observedPrimaryColor)
+    assertEquals(CloverYellowTint, observedSecondaryContainer)
+    assertEquals(CloverCoralTint, observedErrorContainer)
     composeTestRule.onNodeWithTag("hero_theme_toggle_chip").assertTextContains("Light")
   }
 

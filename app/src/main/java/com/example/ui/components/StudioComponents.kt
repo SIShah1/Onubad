@@ -40,7 +40,7 @@ fun StudioSectionCard(
     shape = MaterialTheme.shapes.medium,
     color = containerColor,
     border = BorderStroke(1.dp, borderColor),
-    tonalElevation = 2.dp,
+    tonalElevation = 0.dp,
   ) {
     Column(modifier = Modifier.padding(16.dp)) { content() }
   }
@@ -63,14 +63,14 @@ fun SectionTitleRow(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
       ) {
         Icon(
           imageVector = icon,
           contentDescription = null,
-          tint = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.padding(8.dp).size(18.dp),
+          tint = MaterialTheme.colorScheme.onPrimaryContainer,
+          modifier = Modifier.padding(9.dp).size(19.dp),
         )
       }
       Spacer(modifier = Modifier.width(12.dp))
@@ -128,6 +128,16 @@ fun ParamModeHeader(
   mode: ParamMode,
   onModeSelected: (ParamMode) -> Unit,
 ) {
+  val segmentedColors =
+    SegmentedButtonDefaults.colors(
+      activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+      activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+      inactiveContainerColor = MaterialTheme.colorScheme.surface,
+      inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+      activeBorderColor = MaterialTheme.colorScheme.outlineVariant,
+      inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant,
+    )
+
   Column(modifier = Modifier.fillMaxWidth()) {
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -152,6 +162,7 @@ fun ParamModeHeader(
           selected = mode == ParamMode.DEFAULT,
           onClick = { onModeSelected(ParamMode.DEFAULT) },
           shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+          colors = segmentedColors,
         ) {
           Text("Default", style = MaterialTheme.typography.labelMedium)
         }
@@ -159,6 +170,7 @@ fun ParamModeHeader(
           selected = mode == ParamMode.MANUAL,
           onClick = { onModeSelected(ParamMode.MANUAL) },
           shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+          colors = segmentedColors,
         ) {
           Text("Manual", style = MaterialTheme.typography.labelMedium)
         }

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.SettingsSuggest
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -108,11 +109,22 @@ fun SettingsScreen(
 
       Spacer(modifier = Modifier.height(12.dp))
 
+      val themeSegmentedColors =
+        SegmentedButtonDefaults.colors(
+          activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          inactiveContainerColor = MaterialTheme.colorScheme.surface,
+          inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+          activeBorderColor = MaterialTheme.colorScheme.outlineVariant,
+          inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant,
+        )
+
       SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
         SegmentedButton(
           selected = themeController.themeMode == ThemeMode.DARK,
           onClick = { themeController.onSetThemeMode(ThemeMode.DARK) },
           shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
+          colors = themeSegmentedColors,
           icon = {
             Icon(
               imageVector = Icons.Rounded.DarkMode,
@@ -128,6 +140,7 @@ fun SettingsScreen(
           selected = themeController.themeMode == ThemeMode.LIGHT,
           onClick = { themeController.onSetThemeMode(ThemeMode.LIGHT) },
           shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
+          colors = themeSegmentedColors,
           icon = {
             Icon(
               imageVector = Icons.Rounded.LightMode,
@@ -143,6 +156,7 @@ fun SettingsScreen(
           selected = themeController.themeMode == ThemeMode.SYSTEM,
           onClick = { themeController.onSetThemeMode(ThemeMode.SYSTEM) },
           shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+          colors = themeSegmentedColors,
           icon = {
             Icon(
               imageVector = Icons.Rounded.SettingsSuggest,
@@ -173,6 +187,11 @@ fun SettingsScreen(
         trailing = {
           FilledTonalButton(
             onClick = { showAddExampleDialog = true },
+            colors =
+              ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
             modifier = Modifier.testTag("add_few_shot_button"),
           ) {
             Icon(
@@ -350,11 +369,22 @@ private fun NamingConventionCard(
 
     Spacer(modifier = Modifier.height(12.dp))
 
+    val namingSegmentedColors =
+      SegmentedButtonDefaults.colors(
+        activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+        activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        inactiveContainerColor = MaterialTheme.colorScheme.surface,
+        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        activeBorderColor = MaterialTheme.colorScheme.outlineVariant,
+        inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant,
+      )
+
     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
       SegmentedButton(
         selected = settings.namingMode == NamingMode.DEFAULT,
         onClick = { onSaveNaming(NamingMode.DEFAULT, prefixDraft, suffixDraft) },
         shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+        colors = namingSegmentedColors,
         modifier = Modifier.testTag("naming_default_button"),
       ) {
         Text("Default (_BSub)")
@@ -363,6 +393,7 @@ private fun NamingConventionCard(
         selected = settings.namingMode == NamingMode.CUSTOM,
         onClick = { onSaveNaming(NamingMode.CUSTOM, prefixDraft, suffixDraft) },
         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+        colors = namingSegmentedColors,
         modifier = Modifier.testTag("naming_custom_button"),
       ) {
         Text("Custom Prefix/Suffix")

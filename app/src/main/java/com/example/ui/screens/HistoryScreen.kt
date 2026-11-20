@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Preview
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -275,10 +276,10 @@ private fun HistoryItemCard(
         text = item.status,
         containerColor =
           if (isCompleted) MaterialTheme.colorScheme.tertiaryContainer
-          else MaterialTheme.colorScheme.primaryContainer,
+          else MaterialTheme.colorScheme.secondaryContainer,
         contentColor =
           if (isCompleted) MaterialTheme.colorScheme.onTertiaryContainer
-          else MaterialTheme.colorScheme.onPrimaryContainer,
+          else MaterialTheme.colorScheme.onSecondaryContainer,
       )
     }
 
@@ -314,6 +315,11 @@ private fun HistoryItemCard(
     ) {
       FilledTonalButton(
         onClick = onPreview,
+        colors =
+          ButtonDefaults.filledTonalButtonColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          ),
         modifier = Modifier.weight(1f).testTag("history_preview_${item.id}"),
       ) {
         Icon(

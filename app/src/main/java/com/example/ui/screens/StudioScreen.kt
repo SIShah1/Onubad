@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -58,7 +59,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -73,8 +73,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -100,6 +101,13 @@ import com.example.srt.SrtEngine
 import com.example.ui.components.SectionTitleRow
 import com.example.ui.components.StatusPill
 import com.example.ui.components.StudioSectionCard
+import com.example.ui.theme.CloverCoral
+import com.example.ui.theme.CloverEmerald
+import com.example.ui.theme.CloverEmeraldDeep
+import com.example.ui.theme.CloverMintInk
+import com.example.ui.theme.CloverMintSoft
+import com.example.ui.theme.CloverYellow
+import com.example.ui.theme.CloverYellowInk
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalThemeController
 import com.example.ui.viewmodel.StudioFormState
@@ -173,12 +181,23 @@ fun StudioScreen(
 
       Spacer(modifier = Modifier.height(14.dp))
 
+      val segmentedColors =
+        SegmentedButtonDefaults.colors(
+          activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          inactiveContainerColor = MaterialTheme.colorScheme.surface,
+          inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+          activeBorderColor = MaterialTheme.colorScheme.outlineVariant,
+          inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant,
+        )
+
       SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
         SegmentedButton(
           selected = formState.inputMode == InputMode.MOVIE,
           onClick = { if (!isRunning) onInputModeChange(InputMode.MOVIE) },
           enabled = !isRunning,
           shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+          colors = segmentedColors,
           icon = {
             Icon(
               imageVector = Icons.Rounded.Movie,
@@ -196,6 +215,7 @@ fun StudioScreen(
           onClick = { if (!isRunning) onInputModeChange(InputMode.SERIES) },
           enabled = !isRunning,
           shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+          colors = segmentedColors,
           icon = {
             Icon(
               imageVector = Icons.Rounded.Tv,
@@ -210,6 +230,12 @@ fun StudioScreen(
       }
 
       Spacer(modifier = Modifier.height(14.dp))
+
+      val tonalPickerColors =
+        ButtonDefaults.filledTonalButtonColors(
+          containerColor = MaterialTheme.colorScheme.primaryContainer,
+          contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
 
       if (formState.inputMode == InputMode.MOVIE) {
         Row(
@@ -242,8 +268,13 @@ fun StudioScreen(
         FilledTonalButton(
           onClick = { singleSrtLauncher.launch(arrayOf("*/*")) },
           enabled = !isRunning && !formState.isAnalyzingFiles,
+          shape = RoundedCornerShape(14.dp),
+          colors = tonalPickerColors,
           modifier =
-            Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("pick_single_srt_button"),
+            Modifier.fillMaxWidth()
+              .height(50.dp)
+              .minimumInteractiveComponentSize()
+              .testTag("pick_single_srt_button"),
         ) {
           Icon(
             imageVector = Icons.Rounded.FolderOpen,
@@ -286,8 +317,13 @@ fun StudioScreen(
         FilledTonalButton(
           onClick = { multiSrtLauncher.launch(arrayOf("*/*")) },
           enabled = !isRunning && !formState.isAnalyzingFiles,
+          shape = RoundedCornerShape(14.dp),
+          colors = tonalPickerColors,
           modifier =
-            Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("pick_multi_srt_button"),
+            Modifier.fillMaxWidth()
+              .height(50.dp)
+              .minimumInteractiveComponentSize()
+              .testTag("pick_multi_srt_button"),
         ) {
           Icon(
             imageVector = Icons.Rounded.FolderOpen,
@@ -385,6 +421,12 @@ fun StudioScreen(
             }
           },
           enabled = formState.activeFiles.isNotEmpty() && !formState.isAnalyzingFiles,
+          shape = RoundedCornerShape(50),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
           modifier =
             Modifier.weight(1f)
               .height(54.dp)
@@ -401,6 +443,7 @@ fun StudioScreen(
       } else {
         Button(
           onClick = onAbortTranslation,
+          shape = RoundedCornerShape(50),
           colors =
             ButtonDefaults.buttonColors(
               containerColor = MaterialTheme.colorScheme.error,
@@ -444,20 +487,27 @@ private fun StudioHeroBanner(
 ) {
   val themeController = LocalThemeController.current
   val isDark = themeController.isDarkTheme
+  val hasActiveKeys = totalKeysCount > 0 && activeKeysCount > 0
+  val heroStart = if (isDark) Color(0xFF0E3E33) else CloverEmerald
+  val heroEnd = if (isDark) Color(0xFF07231C) else CloverEmeraldDeep
 
   Surface(
-    modifier = Modifier.fillMaxWidth().height(136.dp),
+    modifier = Modifier.fillMaxWidth().height(142.dp),
     shape = MaterialTheme.shapes.large,
-    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    tonalElevation = 2.dp,
+    color = heroStart,
+    border =
+      BorderStroke(
+        width = 1.dp,
+        color = if (isDark) Color(0xFF1F5D4D) else CloverEmeraldDeep.copy(alpha = 0.35f),
+      ),
+    tonalElevation = 0.dp,
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
       Image(
         painter = painterResource(id = R.drawable.img_studio_banner_1795096561719),
         contentDescription = "BSub Translator Studio Banner",
         contentScale = ContentScale.Crop,
-        alpha = if (isDark) 0.92f else 0.14f,
+        alpha = if (isDark) 0.14f else 0.08f,
         modifier = Modifier.fillMaxSize(),
       )
       Box(
@@ -465,26 +515,25 @@ private fun StudioHeroBanner(
           Modifier.fillMaxSize()
             .background(
               Brush.horizontalGradient(
-                colors =
-                  if (isDark) {
-                    listOf(
-                      MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f),
-                      MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.78f),
-                      MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.54f),
-                    )
-                  } else {
-                    listOf(
-                      MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                      MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f),
-                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
-                    )
-                  }
+                colors = listOf(heroStart.copy(alpha = 0.94f), heroEnd.copy(alpha = 0.96f)),
               )
             ),
       )
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        drawCircle(
+          color = Color(0xFF56CEBA).copy(alpha = 0.09f),
+          radius = size.height * 0.62f,
+          center = Offset(size.width * 0.92f, size.height * 0.25f),
+        )
+        drawCircle(
+          color = CloverYellow.copy(alpha = 0.07f),
+          radius = size.height * 0.42f,
+          center = Offset(size.width * 0.78f, size.height * 0.95f),
+        )
+      }
 
       Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(18.dp),
         verticalArrangement = Arrangement.SpaceBetween,
       ) {
         Row(
@@ -496,20 +545,19 @@ private fun StudioHeroBanner(
             Text(
               text = "BSub Translator",
               style = MaterialTheme.typography.headlineMedium,
-              color = MaterialTheme.colorScheme.onSurface,
+              color = Color.White,
             )
             Text(
-              text = "Automated English -> Bengali SRT Studio",
+              text = "English to Bengali SRT studio",
               style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              color = Color(0xFFD2F2E8),
             )
           }
 
           Surface(
             onClick = onNavigateToKeys,
             shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+            color = if (hasActiveKeys) CloverMintSoft else CloverCoral,
             modifier = Modifier.testTag("hero_keys_chip"),
           ) {
             Row(
@@ -519,16 +567,16 @@ private fun StudioHeroBanner(
               Icon(
                 imageVector = Icons.Rounded.Key,
                 contentDescription = "API Keys",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(15.dp),
+                tint = if (hasActiveKeys) CloverMintInk else Color(0xFF420D08),
+                modifier = Modifier.size(14.dp),
               )
               Spacer(modifier = Modifier.width(6.dp))
               Text(
                 text =
                   if (totalKeysCount == 0) "0 Keys"
                   else "$activeKeysCount/$totalKeysCount Keys",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = if (hasActiveKeys) CloverMintInk else Color(0xFF420D08),
               )
             }
           }
@@ -545,23 +593,21 @@ private fun StudioHeroBanner(
           ) {
             StatusPill(
               text = modelName,
-              containerColor =
-                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
-              contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+              containerColor = Color.White.copy(alpha = 0.16f),
+              contentColor = Color.White,
             )
             StatusPill(
               text = "$chunkSize blocks/batch",
-              containerColor =
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (isDark) 0.55f else 0.92f),
-              contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              containerColor = CloverYellow,
+              contentColor = CloverYellowInk,
             )
           }
 
           Surface(
             onClick = themeController.onToggleLightDark,
             shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            color = Color.White.copy(alpha = 0.16f),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
             modifier = Modifier.testTag("hero_theme_toggle_chip"),
           ) {
             Row(
@@ -571,14 +617,14 @@ private fun StudioHeroBanner(
               Icon(
                 imageVector = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
                 contentDescription = if (isDark) "Switch to Light Mode" else "Switch to Dark Mode",
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (isDark) CloverYellow else CloverMintSoft,
                 modifier = Modifier.size(14.dp),
               )
               Spacer(modifier = Modifier.width(5.dp))
               Text(
                 text = if (isDark) "Dark" else "Light",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = Color.White,
               )
             }
           }
@@ -826,7 +872,7 @@ private fun LiveProcessingSection(
   }
 
   StudioSectionCard(
-    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     borderColor =
       when (sessionState.status) {
         TranslationStatus.RUNNING -> MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
@@ -857,7 +903,7 @@ private fun LiveProcessingSection(
                 TranslationStatus.COMPLETED -> MaterialTheme.colorScheme.tertiaryContainer
                 TranslationStatus.ABORTED,
                 TranslationStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
-                TranslationStatus.IDLE -> MaterialTheme.colorScheme.surfaceContainerHigh
+                TranslationStatus.IDLE -> MaterialTheme.colorScheme.surfaceContainer
               },
             contentColor =
               when (sessionState.status) {
@@ -890,7 +936,7 @@ private fun LiveProcessingSection(
     // Room-Backed SRT Progress Card
     Surface(
       modifier = Modifier.fillMaxWidth().testTag("room_progress_card"),
-      shape = RoundedCornerShape(12.dp),
+      shape = RoundedCornerShape(14.dp),
       color = MaterialTheme.colorScheme.surfaceContainerLow,
       border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
@@ -943,6 +989,8 @@ private fun LiveProcessingSection(
         Spacer(modifier = Modifier.height(8.dp))
         LinearProgressIndicator(
           progress = { animatedProgress },
+          color = MaterialTheme.colorScheme.primary,
+          trackColor = MaterialTheme.colorScheme.primaryContainer,
           modifier =
             Modifier.fillMaxWidth()
               .height(9.dp)
@@ -1045,6 +1093,8 @@ private fun LiveProcessingSection(
                   Spacer(modifier = Modifier.height(4.dp))
                   LinearProgressIndicator(
                     progress = { animatedFileProgress },
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(50)),
                   )
                 }
@@ -1093,11 +1143,19 @@ private fun LiveProcessingSection(
 
     Spacer(modifier = Modifier.height(12.dp))
 
+    val isDarkTheme = LocalThemeController.current.isDarkTheme
+    val logContainerColor =
+      if (isDarkTheme) MaterialTheme.colorScheme.surfaceContainerHighest
+      else MaterialTheme.colorScheme.surfaceContainerLow
+
     // Persistent Console Log Window
     Surface(
-      modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 240.dp),
-      shape = RoundedCornerShape(12.dp),
-      color = MaterialTheme.colorScheme.surfaceContainerLowest,
+      modifier =
+        Modifier.fillMaxWidth()
+          .heightIn(min = 120.dp, max = 240.dp)
+          .testTag("processing_log_container"),
+      shape = RoundedCornerShape(14.dp),
+      color = logContainerColor,
       border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
       if (sessionState.logs.isEmpty()) {
@@ -1114,7 +1172,7 @@ private fun LiveProcessingSection(
       } else {
         LazyColumn(
           state = logListState,
-          modifier = Modifier.fillMaxWidth().padding(10.dp),
+          modifier = Modifier.fillMaxWidth().padding(12.dp),
           verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
           items(items = sessionState.logs, key = { it.id }) { log ->
@@ -1131,7 +1189,7 @@ private fun LogLineRow(log: ProcessingLogEntry) {
   val accentColor =
     when (log.level) {
       LogLevel.SUCCESS -> MaterialTheme.colorScheme.tertiary
-      LogLevel.WARNING -> MaterialTheme.colorScheme.primary
+      LogLevel.WARNING -> MaterialTheme.colorScheme.secondary
       LogLevel.ERROR -> MaterialTheme.colorScheme.error
       LogLevel.COOLDOWN -> MaterialTheme.colorScheme.secondary
       LogLevel.INFO -> MaterialTheme.colorScheme.onSurface
