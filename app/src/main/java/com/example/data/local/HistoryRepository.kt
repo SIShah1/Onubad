@@ -1,11 +1,14 @@
 package com.example.data.local
 
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.Flow
 
 class HistoryRepository(
   private val dao: TranslationHistoryDao,
   private val subtitleHistoryDao: SubtitleHistoryDao? = null,
 ) {
+  private val mirroredSubtitleIds = ConcurrentHashMap<Long, Long>()
+
   val historyItems: Flow<List<TranslationHistoryEntity>> = dao.getAllHistory()
 
   val totalCount: Flow<Int> = dao.observeTotalCount()
@@ -25,13 +28,22 @@ class HistoryRepository(
 
   suspend fun saveRecord(record: TranslationHistoryEntity): Long {
     val insertedId = dao.insertHistory(record)
-    subtitleHistoryDao?.insert(record.toSubtitleHistory(idOverride = insertedId))
+    subtitleHistoryDao?.let { subDao ->
+      val existingSubId = mirroredSubtitleIds[insertedId] ?: 0L
+      val subId = subDao.insert(record.toSubtitleHistory(idOverride = existingSubId))
+      mirroredSubtitleIds[insertedId] = subId
+    }
     return insertedId
   }
 
   suspend fun updateRecord(record: TranslationHistoryEntity) {
     dao.updateHistory(record)
-    subtitleHistoryDao?.insert(record.toSubtitleHistory())
+    subtitleHistoryDao?.let { subDao ->
+      val subId = mirroredSubtitleIds[record.id]
+      if (subId != null) {
+        subDao.update(record.toSubtitleHistory(idOverride = subId))
+      }
+    }
   }
 
   suspend fun createProcessingRecord(
@@ -61,7 +73,10 @@ class HistoryRepository(
         updatedAtEpochMs = nowEpochMs,
       )
     val insertedId = dao.insertHistory(entity)
-    subtitleHistoryDao?.insert(entity.toSubtitleHistory(idOverride = insertedId))
+    subtitleHistoryDao?.let { subDao ->
+      val subId = subDao.insert(entity.toSubtitleHistory(idOverride = 0L))
+      mirroredSubtitleIds[insertedId] = subId
+    }
     return insertedId
   }
 
@@ -75,7 +90,8 @@ class HistoryRepository(
       translatedBlocks = translatedBlocks,
       updatedAtEpochMs = updatedAtEpochMs,
     )
-    subtitleHistoryDao?.getById(historyId)?.let { existing ->
+    val subId = mirroredSubtitleIds[historyId] ?: return
+    subtitleHistoryDao?.getById(subId)?.let { existing ->
       subtitleHistoryDao.update(
         existing.copy(
           translatedBlocks = translatedBlocks,
@@ -108,8 +124,9 @@ class HistoryRepository(
       errorMessage = null,
       updatedAtEpochMs = updatedAtEpochMs,
     )
+    val subId = mirroredSubtitleIds[historyId] ?: return
     subtitleHistoryDao?.updateProcessingResult(
-      id = historyId,
+      id = subId,
       status = HistoryTranslationStatus.COMPLETED,
       statusLabel = HistoryTranslationStatus.COMPLETED.label,
       translatedBlocks = translatedBlocks,
@@ -149,8 +166,9 @@ class HistoryRepository(
       errorMessage = reason,
       updatedAtEpochMs = updatedAtEpochMs,
     )
+    val subId = mirroredSubtitleIds[historyId] ?: return
     subtitleHistoryDao?.updateProcessingResult(
-      id = historyId,
+      id = subId,
       status = HistoryTranslationStatus.PARTIAL,
       statusLabel = label,
       translatedBlocks = translatedBlocks,
@@ -191,8 +209,9 @@ class HistoryRepository(
       errorMessage = errorMessage,
       updatedAtEpochMs = updatedAtEpochMs,
     )
+    val subId = mirroredSubtitleIds[historyId] ?: return
     subtitleHistoryDao?.updateProcessingResult(
-      id = historyId,
+      id = subId,
       status = status,
       statusLabel = status.label,
       translatedBlocks = translatedBlocks,
@@ -208,16 +227,19 @@ class HistoryRepository(
 
   suspend fun deleteRecord(id: Long) {
     dao.deleteById(id)
-    subtitleHistoryDao?.deleteById(id)
+    mirroredSubtitleIds.remove(id)?.let { subId ->
+      subtitleHistoryDao?.deleteById(subId)
+    }
   }
 
   suspend fun clearAll() {
+    mirroredSubtitleIds.clear()
     dao.deleteAll()
     subtitleHistoryDao?.deleteAll()
   }
 
   private fun TranslationHistoryEntity.toSubtitleHistory(
-    idOverride: Long = id,
+    idOverride: Long = 0L,
   ): SubtitleHistory =
     SubtitleHistory(
       id = idOverride,

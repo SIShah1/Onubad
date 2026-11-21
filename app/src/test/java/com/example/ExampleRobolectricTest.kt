@@ -1,13 +1,18 @@
 package com.example
 
 import android.content.Context
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
@@ -62,6 +67,7 @@ import com.example.logging.WorkManagerDiagnosticTree
 import com.example.service.SubtitleTranslationService
 import com.example.service.SubtitleTranslationServiceResult
 import com.example.ui.screens.StudioScreen
+import com.example.ui.screens.fitHeroTitleFontSizeSp
 import com.example.ui.theme.BSubTranslatorTheme
 import com.example.ui.theme.CloverCoralTint
 import com.example.ui.theme.CloverEmerald
@@ -173,6 +179,7 @@ class ExampleRobolectricTest {
 
   @Test
   fun `workmanager subtitle translation worker parses srt seeds room and translates batch`() = runBlocking {
+    app.historyRepository.clearAll()
     app.subtitleTranslationRepository.clearAll()
     app.secureKeyStorage.clearAllKeys()
     app.secureKeyStorage.addSingleKey("AIzaSyDummyTestKeyForWorkManager12345", "Test Key #1")
@@ -253,6 +260,21 @@ class ExampleRobolectricTest {
     assertEquals(SubtitleTranslationStatus.TRANSLATED, rows[0].status)
     assertEquals("সবকিছু ঠিক আছে।", rows[1].translatedBengaliText)
     assertEquals(SubtitleTranslationStatus.TRANSLATED, rows[1].status)
+
+    val subtitleHistoryRows =
+      app.subtitleHistoryRepository.observeByOriginalFileName("test_movie.srt").first()
+    assertEquals(1, subtitleHistoryRows.size)
+    assertEquals(HistoryTranslationStatus.COMPLETED, subtitleHistoryRows[0].status)
+    assertEquals(2, subtitleHistoryRows[0].translatedBlocks)
+
+    val uiHistoryRows = app.historyRepository.historyItems.first()
+    assertTrue(
+      uiHistoryRows.any {
+        it.originalFileName == "test_movie.srt" &&
+          it.translationStatus == HistoryTranslationStatus.COMPLETED &&
+          it.translatedBlocks == 2
+      }
+    )
   }
 
   @Test
@@ -377,15 +399,129 @@ class ExampleRobolectricTest {
         onThemeModeChange = { mode = it },
         animateTransitions = false,
       ) {
+        val controller = LocalThemeController.current
         observedBgColor = MaterialTheme.colorScheme.background
         observedPrimaryColor = MaterialTheme.colorScheme.primary
         observedSecondaryColor = MaterialTheme.colorScheme.secondary
         observedSecondaryContainer = MaterialTheme.colorScheme.secondaryContainer
         observedErrorContainer = MaterialTheme.colorScheme.errorContainer
-        observedIsDark = LocalThemeController.current.isDarkTheme
+        observedIsDark = controller.isDarkTheme
+        Column {
+          Button(
+            onClick = controller.onToggleLightDark,
+            modifier = Modifier.testTag("test_theme_toggle_trigger"),
+          ) {
+            Text(if (controller.isDarkTheme) "Dark" else "Light")
+          }
+          StudioScreen(
+            formState = StudioFormState(),
+            settings = AppSettings(themeMode = mode),
+            apiKeys = emptyList(),
+            sessionState = TranslationSessionState(),
+            onInputModeChange = {},
+            onMovieNameChange = {},
+            onReleaseYearChange = {},
+            onSeriesNameChange = {},
+            onSeasonChange = {},
+            onSingleSrtPicked = {},
+            onMultipleSrtPicked = {},
+            onRemoveFile = {},
+            onMoveSeriesFile = { _, _ -> },
+            onClearFiles = {},
+            onStartTranslation = {},
+            onAbortTranslation = {},
+            onClearLogs = {},
+            onNavigateToKeys = {},
+          )
+        }
+      }
+    }
+
+    composeTestRule.waitForIdle()
+    assertTrue(observedIsDark)
+    assertEquals(StudioMidnight, observedBgColor)
+    assertEquals(CloverMintAqua, observedPrimaryColor)
+    assertEquals(CloverYellow, observedSecondaryColor)
+    composeTestRule.onNodeWithTag("hero_theme_toggle_chip").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("test_theme_toggle_trigger").assertTextContains("Dark")
+
+    composeTestRule.onNodeWithTag("test_theme_toggle_trigger").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(false, observedIsDark)
+    assertEquals(LightCanvas, observedBgColor)
+    assertEquals(CloverEmerald, observedPrimaryColor)
+    assertEquals(CloverYellowTint, observedSecondaryContainer)
+    assertEquals(CloverCoralTint, observedErrorContainer)
+    composeTestRule.onNodeWithTag("test_theme_toggle_trigger").assertTextContains("Light")
+  }
+
+  @Test
+  fun `studio hero banner displays redesigned branding without theme toggle and stacks equal sized status containers`() {
+    var keysClicked = false
+    composeTestRule.setContent {
+      BSubTranslatorTheme(themeMode = ThemeMode.LIGHT) {
         StudioScreen(
           formState = StudioFormState(),
-          settings = AppSettings(themeMode = mode),
+          settings = AppSettings(themeMode = ThemeMode.LIGHT),
+          apiKeys = emptyList(),
+          sessionState = TranslationSessionState(),
+          onInputModeChange = {},
+          onMovieNameChange = {},
+          onReleaseYearChange = {},
+          onSeriesNameChange = {},
+          onSeasonChange = {},
+          onSingleSrtPicked = {},
+          onMultipleSrtPicked = {},
+          onRemoveFile = {},
+          onMoveSeriesFile = { _, _ -> },
+          onClearFiles = {},
+          onStartTranslation = {},
+          onAbortTranslation = {},
+          onClearLogs = {},
+          onNavigateToKeys = { keysClicked = true },
+        )
+      }
+    }
+
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("hero_theme_toggle_chip").assertDoesNotExist()
+    composeTestRule.onNodeWithText("BSub Translator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("English to Bengali Subtitle Studio").assertIsDisplayed()
+
+    val bannerBounds = composeTestRule.onNodeWithTag("hero_banner").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val keysNode = composeTestRule.onNodeWithTag("hero_keys_chip").assertIsDisplayed()
+    val modelNode = composeTestRule.onNodeWithTag("hero_model_chip").assertIsDisplayed()
+    val chunkNode = composeTestRule.onNodeWithTag("hero_chunk_chip").assertIsDisplayed()
+
+    val keysBounds = keysNode.fetchSemanticsNode().boundsInRoot
+    val modelBounds = modelNode.fetchSemanticsNode().boundsInRoot
+    val chunkBounds = chunkNode.fetchSemanticsNode().boundsInRoot
+    val density = composeTestRule.density.density
+
+    assertTrue("Expected compact hero banner <= 112dp", bannerBounds.height <= 112f * density)
+    assertTrue("Expected short status pills <= 26dp, was ${keysBounds.height / density}dp", keysBounds.height <= 26f * density)
+    assertTrue("Expected top pill inside banner", keysBounds.top >= bannerBounds.top)
+    assertTrue("Expected bottom pill inside banner", chunkBounds.bottom <= bannerBounds.bottom)
+    assertEquals(keysBounds.width, modelBounds.width, 1f)
+    assertEquals(modelBounds.width, chunkBounds.width, 1f)
+    assertEquals(keysBounds.height, modelBounds.height, 1f)
+    assertEquals(modelBounds.height, chunkBounds.height, 1f)
+    assertTrue("Expected right-side pills stacked vertically", keysBounds.top < modelBounds.top)
+    assertTrue("Expected model pill above chunk pill", modelBounds.top < chunkBounds.top)
+
+    keysNode.performClick()
+    assertTrue(keysClicked)
+  }
+
+  @Test
+  @Config(sdk = [36], qualifiers = "w440dp-h900dp")
+  fun `studio hero banner scales title font so BSub Translator matches subtitle text width`() {
+    composeTestRule.setContent {
+      BSubTranslatorTheme(themeMode = ThemeMode.LIGHT) {
+        StudioScreen(
+          formState = StudioFormState(),
+          settings = AppSettings(themeMode = ThemeMode.LIGHT),
           apiKeys = emptyList(),
           sessionState = TranslationSessionState(),
           onInputModeChange = {},
@@ -407,21 +543,35 @@ class ExampleRobolectricTest {
     }
 
     composeTestRule.waitForIdle()
-    assertTrue(observedIsDark)
-    assertEquals(StudioMidnight, observedBgColor)
-    assertEquals(CloverMintAqua, observedPrimaryColor)
-    assertEquals(CloverYellow, observedSecondaryColor)
-    composeTestRule.onNodeWithTag("hero_theme_toggle_chip").assertTextContains("Dark")
+    val density = composeTestRule.density.density
+    val bannerBounds = composeTestRule.onNodeWithTag("hero_banner").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val titleBounds = composeTestRule.onNodeWithText("BSub Translator").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val subtitleBounds =
+      composeTestRule.onNodeWithText("English to Bengali Subtitle Studio").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val keysBounds = composeTestRule.onNodeWithTag("hero_keys_chip").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
 
-    composeTestRule.onNodeWithTag("hero_theme_toggle_chip").performClick()
-    composeTestRule.waitForIdle()
+    assertTrue("Expected BSub Translator to sit cleanly inside banner", titleBounds.top >= bannerBounds.top)
+    assertTrue("Expected subtitle to sit cleanly inside banner", subtitleBounds.bottom <= bannerBounds.bottom)
+    assertTrue("Expected title stacked above subtitle", titleBounds.top < subtitleBounds.top)
+    assertTrue("Expected title to stay left of right pill stack", titleBounds.right <= keysBounds.left)
+    assertTrue("Expected subtitle to stay left of right pill stack", subtitleBounds.right <= keysBounds.left)
+    assertTrue("Expected compact hero banner <= 112dp", bannerBounds.height <= 112f * density)
 
-    assertEquals(false, observedIsDark)
-    assertEquals(LightCanvas, observedBgColor)
-    assertEquals(CloverEmerald, observedPrimaryColor)
-    assertEquals(CloverYellowTint, observedSecondaryContainer)
-    assertEquals(CloverCoralTint, observedErrorContainer)
-    composeTestRule.onNodeWithTag("hero_theme_toggle_chip").assertTextContains("Light")
+    // Verify proportional width-matching solver matches subtitle width within 1px
+    val targetSubtitleWidthPx = 204f * density
+    val titleChars = "BSub Translator".length
+    val fittedSp =
+      fitHeroTitleFontSizeSp(
+        targetWidthPx = targetSubtitleWidthPx,
+        maxHeightPx = 64f * density,
+      ) { candidateSp ->
+        val w = titleChars * 0.56f * candidateSp * density
+        val h = 1.1f * candidateSp * density
+        w to h
+      }
+    val resultingWidthPx = titleChars * 0.56f * fittedSp * density
+    assertEquals(targetSubtitleWidthPx, resultingWidthPx, 1f * density)
+    assertTrue("Expected scaled title font size >= 23sp, was $fittedSp", fittedSp >= 23f)
   }
 
   @Test
@@ -1213,4 +1363,43 @@ class ExampleRobolectricTest {
     repo.deleteById(rowId)
     assertEquals(0, repo.totalCount.first())
   }
+
+  @Test
+  fun `workmanager worker records failed subtitle history in room and single file scheduler enqueues work`() =
+    runBlocking {
+      app.historyRepository.clearAll()
+
+      val badWorker =
+        TestListenableWorkerBuilder<SubtitleTranslationWorker>(app)
+          .setInputData(
+            workDataOf(
+              SubtitleTranslationWorker.KEY_SRT_CONTENT to "not valid srt content",
+              SubtitleTranslationWorker.KEY_FILE_NAME to "corrupt_file.srt",
+              SubtitleTranslationWorker.KEY_INPUT_MODE to InputMode.MOVIE.name,
+              SubtitleTranslationWorker.KEY_TITLE to "Corrupt Film",
+            )
+          )
+          .build()
+
+      val failureResult = badWorker.doWork()
+      assertTrue(failureResult is ListenableWorker.Result.Failure)
+
+      val failedHistory =
+        app.subtitleHistoryRepository.observeByOriginalFileName("corrupt_file.srt").first()
+      assertEquals(1, failedHistory.size)
+      assertEquals(HistoryTranslationStatus.FAILED, failedHistory[0].status)
+      assertTrue(failedHistory[0].errorMessage?.isNotBlank() == true)
+
+      val workId =
+        TranslationWorkScheduler.enqueueSingleFileTranslation(
+          context = app,
+          rawSrtContent = "1\n00:00:01,000 --> 00:00:02,000\nHello",
+          fileName = "single_job.srt",
+          inputMode = InputMode.MOVIE,
+          title = "Single Job",
+        )
+      val info = WorkManager.getInstance(app).getWorkInfoById(workId).get()
+      assertEquals(WorkInfo.State.ENQUEUED, info?.state)
+      assertTrue(info?.tags?.contains(TranslationWorkScheduler.TAG_SUBTITLE_TRANSLATION) == true)
+    }
 }

@@ -11,9 +11,11 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,12 +35,10 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Schedule
@@ -67,16 +67,22 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.data.local.FileTranslationProgress
 import com.example.data.local.RoomTranslationProgress
@@ -103,6 +109,8 @@ import com.example.ui.theme.CloverYellow
 import com.example.ui.theme.CloverYellowInk
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalThemeController
+import com.example.ui.theme.PlusJakartaFamily
+import com.example.ui.theme.SpaceGroteskFamily
 import com.example.ui.viewmodel.StudioFormState
 import java.util.Locale
 import kotlin.math.ceil
@@ -482,107 +490,238 @@ private fun StudioHeroBanner(
   val isDark = themeController.isDarkTheme
   val hasActiveKeys = totalKeysCount > 0 && activeKeysCount > 0
   val heroColor = if (isDark) CloverHeroDark else CloverEmerald
+  val keysContainerColor = if (hasActiveKeys) CloverMintSoft else CloverCoral
+  val keysContentColor = if (hasActiveKeys) CloverMintInk else Color(0xFF420D08)
 
   Surface(
-    modifier = Modifier.fillMaxWidth().height(142.dp),
+    modifier = Modifier.fillMaxWidth().height(106.dp).testTag("hero_banner"),
     shape = BSubShape.petal,
     color = heroColor,
     tonalElevation = 0.dp,
   ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-      Column(
-        modifier = Modifier.fillMaxSize().padding(18.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "BSub Translator",
-              style = MaterialTheme.typography.headlineMedium,
-              color = Color.White,
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 11.dp)) {
+      val density = LocalDensity.current
+      val textMeasurer = rememberTextMeasurer()
+      val isCompactWidth = maxWidth < 380.dp
+      val rightStackWidth = if (isCompactWidth) 120.dp else 156.dp
+      val columnGap = if (isCompactWidth) 10.dp else 12.dp
+      val leftWidthPx =
+        with(density) { (maxWidth - rightStackWidth - columnGap).coerceAtLeast(1.dp).roundToPx() }
+      val innerHeightPx = with(density) { maxHeight.coerceAtLeast(1.dp).roundToPx() }
+      val verticalGapPx = with(density) { 4.dp.roundToPx() }
+
+      val titleText = "BSub Translator"
+      val subtitleText = "English to Bengali Subtitle Studio"
+      val baseTitleStyle =
+        MaterialTheme.typography.headlineMedium.copy(
+          fontFamily = SpaceGroteskFamily,
+          fontWeight = FontWeight.Bold,
+          letterSpacing = (-0.5).sp,
+        )
+      val baseSubtitleStyle =
+        MaterialTheme.typography.bodyMedium.copy(
+          fontFamily = PlusJakartaFamily,
+          fontWeight = FontWeight.Medium,
+          letterSpacing = 0.1.sp,
+        )
+
+      val (fittedTitleSize, fittedSubtitleSize, subtitleMaxLines) =
+        remember(leftWidthPx, innerHeightPx, density.density, density.fontScale, isCompactWidth) {
+          val preferredSubSp = if (isCompactWidth) 12f else 13f
+          val minSingleLineSubSp = 9.5f
+          var chosenSubSp = preferredSubSp
+          var chosenSubMaxLines = 2
+          var subResult =
+            textMeasurer.measure(
+              text = subtitleText,
+              style =
+                baseSubtitleStyle.copy(
+                  fontSize = chosenSubSp.sp,
+                  lineHeight = (chosenSubSp * 1.28f).sp,
+                ),
+              constraints = Constraints(maxWidth = leftWidthPx),
+              maxLines = 2,
             )
-            Text(
-              text = "English to Bengali SRT studio",
-              style = MaterialTheme.typography.bodySmall,
-              color = Color(0xFFD2F2E8),
-            )
+
+          var probeSp = preferredSubSp
+          while (probeSp >= minSingleLineSubSp) {
+            val probeResult =
+              textMeasurer.measure(
+                text = subtitleText,
+                style =
+                  baseSubtitleStyle.copy(
+                    fontSize = probeSp.sp,
+                    lineHeight = (probeSp * 1.28f).sp,
+                  ),
+                constraints = Constraints(maxWidth = leftWidthPx),
+                maxLines = 1,
+                softWrap = false,
+              )
+            if (!probeResult.hasVisualOverflow && probeResult.size.width <= leftWidthPx) {
+              chosenSubSp = probeSp
+              chosenSubMaxLines = 1
+              subResult = probeResult
+              break
+            }
+            probeSp -= 0.5f
           }
 
+          val targetWidthPx =
+            if (chosenSubMaxLines == 1) {
+              (subResult.getLineRight(0) - subResult.getLineLeft(0))
+                .coerceAtLeast(1f)
+                .coerceAtMost(leftWidthPx.toFloat())
+            } else {
+              leftWidthPx.toFloat()
+            }
+
+          val maxTitleHeightPx =
+            (innerHeightPx - subResult.size.height - verticalGapPx).coerceAtLeast(1)
+
+          val bestTitleSp =
+            fitHeroTitleFontSizeSp(
+              targetWidthPx = targetWidthPx,
+              maxHeightPx = maxTitleHeightPx.toFloat(),
+            ) { candidateSp ->
+              val titleResult =
+                textMeasurer.measure(
+                  text = titleText,
+                  style =
+                    baseTitleStyle.copy(
+                      fontSize = candidateSp.sp,
+                      lineHeight = (candidateSp * 1.1f).sp,
+                    ),
+                  constraints = Constraints(maxWidth = leftWidthPx),
+                  maxLines = 1,
+                  softWrap = false,
+                )
+              val width =
+                if (titleResult.hasVisualOverflow) Float.MAX_VALUE
+                else titleResult.getLineRight(0) - titleResult.getLineLeft(0)
+              width to titleResult.size.height.toFloat()
+            }
+
+          Triple(bestTitleSp.sp, chosenSubSp.sp, chosenSubMaxLines)
+        }
+
+      val pillShape = RoundedCornerShape(50)
+      val pillTextStyle =
+        MaterialTheme.typography.labelSmall.copy(
+          fontFamily = JetBrainsMonoFamily,
+          fontSize = if (isCompactWidth) 10.sp else 10.5.sp,
+          lineHeight = 12.sp,
+        )
+
+      Row(
+        modifier = Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(columnGap),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(
+          modifier = Modifier.weight(1f).fillMaxHeight(),
+          verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+        ) {
+          Text(
+            text = titleText,
+            style =
+              baseTitleStyle.copy(
+                fontSize = fittedTitleSize,
+                lineHeight = fittedTitleSize * 1.1f,
+              ),
+            color = Color.White,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Text(
+            text = subtitleText,
+            style =
+              baseSubtitleStyle.copy(
+                fontSize = fittedSubtitleSize,
+                lineHeight = fittedSubtitleSize * 1.28f,
+              ),
+            color = Color(0xFFD2F2E8),
+            maxLines = subtitleMaxLines,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+
+        Column(
+          modifier = Modifier.width(rightStackWidth).fillMaxHeight(),
+          verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
           Surface(
-            onClick = onNavigateToKeys,
-            shape = RoundedCornerShape(50),
-            color = if (hasActiveKeys) CloverMintSoft else CloverCoral,
-            modifier = Modifier.testTag("hero_keys_chip"),
+            shape = pillShape,
+            color = keysContainerColor,
+            modifier =
+              Modifier.weight(1f)
+                .fillMaxWidth()
+                .clip(pillShape)
+                .clickable(
+                  role = Role.Button,
+                  onClickLabel = "Manage API Keys",
+                  onClick = onNavigateToKeys,
+                )
+                .testTag("hero_keys_chip"),
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+              modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+              horizontalArrangement = Arrangement.Center,
               verticalAlignment = Alignment.CenterVertically,
             ) {
               Icon(
                 imageVector = Icons.Rounded.Key,
                 contentDescription = "API Keys",
-                tint = if (hasActiveKeys) CloverMintInk else Color(0xFF420D08),
-                modifier = Modifier.size(14.dp),
+                tint = keysContentColor,
+                modifier = Modifier.size(12.dp),
               )
-              Spacer(modifier = Modifier.width(6.dp))
+              Spacer(modifier = Modifier.width(5.dp))
               Text(
                 text =
                   if (totalKeysCount == 0) "0 Keys"
                   else "$activeKeysCount/$totalKeysCount Keys",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                color = if (hasActiveKeys) CloverMintInk else Color(0xFF420D08),
+                style = pillTextStyle.copy(fontWeight = FontWeight.SemiBold),
+                color = keysContentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
               )
             }
           }
-        }
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+          Surface(
+            shape = pillShape,
+            color = Color.White.copy(alpha = 0.16f),
+            modifier = Modifier.weight(1f).fillMaxWidth().testTag("hero_model_chip"),
           ) {
-            StatusPill(
-              text = modelName,
-              containerColor = Color.White.copy(alpha = 0.16f),
-              contentColor = Color.White,
-            )
-            StatusPill(
-              text = "$chunkSize blocks/batch",
-              containerColor = CloverYellow,
-              contentColor = CloverYellowInk,
-            )
+            Box(
+              modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = modelName,
+                style = pillTextStyle.copy(fontWeight = FontWeight.Medium),
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
           }
 
           Surface(
-            onClick = themeController.onToggleLightDark,
-            shape = RoundedCornerShape(50),
-            color = Color.White.copy(alpha = 0.16f),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
-            modifier = Modifier.testTag("hero_theme_toggle_chip"),
+            shape = pillShape,
+            color = CloverYellow,
+            modifier = Modifier.weight(1f).fillMaxWidth().testTag("hero_chunk_chip"),
           ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-              verticalAlignment = Alignment.CenterVertically,
+            Box(
+              modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+              contentAlignment = Alignment.Center,
             ) {
-              Icon(
-                imageVector = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
-                contentDescription = if (isDark) "Switch to Light Mode" else "Switch to Dark Mode",
-                tint = if (isDark) CloverYellow else CloverMintSoft,
-                modifier = Modifier.size(14.dp),
-              )
-              Spacer(modifier = Modifier.width(5.dp))
               Text(
-                text = if (isDark) "Dark" else "Light",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White,
+                text = "$chunkSize blocks/batch",
+                style = pillTextStyle.copy(fontWeight = FontWeight.SemiBold),
+                color = CloverYellowInk,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
               )
             }
           }
@@ -590,6 +729,29 @@ private fun StudioHeroBanner(
       }
     }
   }
+}
+
+internal fun fitHeroTitleFontSizeSp(
+  targetWidthPx: Float,
+  maxHeightPx: Float,
+  minSp: Float = 14f,
+  maxSp: Float = 36f,
+  measureTitle: (Float) -> Pair<Float, Float>,
+): Float {
+  var lowSp = minSp
+  var highSp = maxSp
+  var bestTitleSp = minSp
+  repeat(14) {
+    val midSp = (lowSp + highSp) * 0.5f
+    val (measuredWidth, measuredHeight) = measureTitle(midSp)
+    if (measuredWidth <= targetWidthPx && measuredHeight <= maxHeightPx) {
+      bestTitleSp = midSp
+      lowSp = midSp
+    } else {
+      highSp = midSp
+    }
+  }
+  return bestTitleSp
 }
 
 @Composable

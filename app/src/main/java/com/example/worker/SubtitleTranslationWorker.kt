@@ -20,6 +20,8 @@ import com.example.BSubApplication
 import com.example.BuildConfig
 import com.example.MainActivity
 import com.example.R
+import com.example.data.local.HistoryTranslationStatus
+import com.example.data.local.TranslationHistoryEntity
 import com.example.domain.model.InputMode
 import com.example.domain.model.SelectedSubtitleFile
 import com.example.domain.model.TranslationJobRequest
@@ -69,16 +71,19 @@ class SubtitleTranslationWorker(
 
     val loaded = loadAndParseRequest(workIdString)
     if (loaded == null) {
+      val failureReason = "No valid subtitle files found for translation."
+      recordPreExecutionFailure(failureReason)
       TranslationLogger.logWorkerError(
         workId = workIdString,
         message = "Worker aborted before execution: no valid subtitle files found.",
       )
       return Result.failure(
-        workDataOf(KEY_ERROR_MESSAGE to "No valid subtitle files found for translation.")
+        workDataOf(KEY_ERROR_MESSAGE to failureReason)
       )
     }
 
     val (manifestFile, cachedSrtFiles, jobRequest) = loaded
+    val roomJobIdsArray = jobRequest.preSeededJobIds.values.toTypedArray()
     TranslationLogger.logWorkerStarted(
       workId = workIdString,
       fileCount = jobRequest.files.size,
@@ -146,6 +151,7 @@ class SubtitleTranslationWorker(
           workDataOf(
             KEY_COMPLETED_FILES to finalState.completedFiles,
             KEY_COMPLETED_BLOCKS to finalState.completedBlocksAllFiles,
+            KEY_ROOM_JOB_IDS to roomJobIdsArray,
           )
         )
       } else {
@@ -154,7 +160,11 @@ class SubtitleTranslationWorker(
           message = "Worker finished unsuccessfully: ${finalState.activePhaseMessage}",
         )
         Result.failure(
-          workDataOf(KEY_ERROR_MESSAGE to finalState.activePhaseMessage)
+          workDataOf(
+            KEY_ERROR_MESSAGE to finalState.activePhaseMessage,
+            KEY_COMPLETED_BLOCKS to finalState.completedBlocksAllFiles,
+            KEY_ROOM_JOB_IDS to roomJobIdsArray,
+          )
         )
       }
     } catch (cancel: CancellationException) {
@@ -167,19 +177,47 @@ class SubtitleTranslationWorker(
       }
       throw cancel
     } catch (e: Exception) {
+      val errMsg = e.message ?: "Background translation failed"
+      withContext(NonCancellable) {
+        recordPreExecutionFailure(errMsg)
+      }
       TranslationLogger.logWorkerError(
         workId = workIdString,
         message = "Unhandled exception inside SubtitleTranslationWorker",
         throwable = e,
       )
       Result.failure(
-        workDataOf(KEY_ERROR_MESSAGE to (e.message ?: "Background translation failed"))
+        workDataOf(KEY_ERROR_MESSAGE to errMsg)
       )
     } finally {
       withContext(NonCancellable) {
         manifestFile?.let { runCatching { it.delete() } }
         cachedSrtFiles.forEach { file -> runCatching { file.delete() } }
       }
+    }
+  }
+
+  private suspend fun recordPreExecutionFailure(reason: String) {
+    runCatching {
+      val fileName = inputData.getString(KEY_FILE_NAME)?.takeIf { it.isNotBlank() } ?: "subtitle.srt"
+      val mode = inputData.getString(KEY_INPUT_MODE)?.takeIf { it.isNotBlank() } ?: InputMode.MOVIE.name
+      val titleMeta = inputData.getString(KEY_TITLE)?.takeIf { it.isNotBlank() } ?: fileName
+      val modelUsed = app.settingsRepository.getSettingsSnapshot().effectiveModel
+      app.historyRepository.saveRecord(
+        TranslationHistoryEntity(
+          originalFileName = fileName,
+          mode = mode,
+          titleMetadata = titleMeta,
+          totalBlocks = 0,
+          translatedBlocks = 0,
+          totalLines = 0,
+          fileSizeBytes = 0L,
+          modelUsed = modelUsed,
+          status = HistoryTranslationStatus.FAILED.label,
+          translationStatus = HistoryTranslationStatus.FAILED,
+          errorMessage = reason,
+        )
+      )
     }
   }
 
@@ -567,6 +605,7 @@ class SubtitleTranslationWorker(
     const val KEY_TITLE = "title"
     const val KEY_SECONDARY_META = "secondary_meta"
     const val KEY_ROOM_JOB_ID = "room_job_id"
+    const val KEY_ROOM_JOB_IDS = "room_job_ids"
 
     const val KEY_PROGRESS_PERCENT = "progress_percent"
     const val KEY_COMPLETED_BLOCKS = "completed_blocks"

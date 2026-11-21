@@ -1,6 +1,7 @@
 package com.example.worker
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -17,6 +18,7 @@ import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -104,12 +106,57 @@ object TranslationWorkScheduler {
         OneTimeWorkRequestBuilder<SubtitleTranslationWorker>()
           .setConstraints(constraints)
           .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+          .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15L, TimeUnit.SECONDS)
           .addTag(TAG_SUBTITLE_TRANSLATION)
           .setInputData(
             workDataOf(
               SubtitleTranslationWorker.KEY_JOB_CONFIG_PATH to manifestFile.absolutePath,
               SubtitleTranslationWorker.KEY_INPUT_MODE to
                 (if (request.inputMode == InputMode.MOVIE) InputMode.MOVIE.name else InputMode.SERIES.name),
+            )
+          )
+          .build()
+
+      WorkManager.getInstance(appContext)
+        .enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, workRequest)
+
+      workRequest.id
+    }
+
+  suspend fun enqueueSingleFileTranslation(
+    context: Context,
+    rawSrtContent: String,
+    fileName: String,
+    inputMode: InputMode = InputMode.MOVIE,
+    title: String = "",
+    secondaryMeta: String = "",
+    roomJobId: String = UUID.randomUUID().toString(),
+  ): UUID =
+    withContext(Dispatchers.IO) {
+      val appContext = context.applicationContext
+      val jobsDir = File(appContext.filesDir, WORK_JOBS_DIR).apply { mkdirs() }
+      val cachedFile = File(jobsDir, "${roomJobId}.srt")
+      cachedFile.writeText(rawSrtContent, Charsets.UTF_8)
+
+      val constraints =
+        Constraints.Builder()
+          .setRequiredNetworkType(NetworkType.CONNECTED)
+          .build()
+
+      val workRequest =
+        OneTimeWorkRequestBuilder<SubtitleTranslationWorker>()
+          .setConstraints(constraints)
+          .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+          .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15L, TimeUnit.SECONDS)
+          .addTag(TAG_SUBTITLE_TRANSLATION)
+          .setInputData(
+            workDataOf(
+              SubtitleTranslationWorker.KEY_SRT_FILE_PATH to cachedFile.absolutePath,
+              SubtitleTranslationWorker.KEY_FILE_NAME to fileName,
+              SubtitleTranslationWorker.KEY_INPUT_MODE to inputMode.name,
+              SubtitleTranslationWorker.KEY_TITLE to title,
+              SubtitleTranslationWorker.KEY_SECONDARY_META to secondaryMeta,
+              SubtitleTranslationWorker.KEY_ROOM_JOB_ID to roomJobId,
             )
           )
           .build()
