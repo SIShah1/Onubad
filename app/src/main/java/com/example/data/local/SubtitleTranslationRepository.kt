@@ -29,6 +29,16 @@ class SubtitleTranslationRepository(private val dao: SubtitleTranslationDao) {
 
   suspend fun getById(id: Long): SubtitleTranslation? = dao.getById(id)
 
+  suspend fun getLatestForFile(fileName: String): List<SubtitleTranslation> {
+    if (fileName.isBlank()) return emptyList()
+    val latestJobId = dao.getLatestJobIdForFileName(fileName)
+    return if (latestJobId != null) {
+      dao.getByJobIdOnce(latestJobId).filter { it.fileName == fileName }
+    } else {
+      dao.getByFileNameOnce(fileName)
+    }
+  }
+
   suspend fun insertTranslation(
     jobId: String,
     fileName: String,

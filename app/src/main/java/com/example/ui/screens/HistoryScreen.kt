@@ -3,8 +3,8 @@ package com.example.ui.screens
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,14 +20,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Preview
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -39,14 +40,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,18 +59,20 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.local.HistoryTranslationStatus
 import com.example.data.local.TranslationHistoryEntity
+import com.example.data.storage.SubtitleFileStorage
 import com.example.srt.SrtEngine
 import com.example.ui.components.SectionTitleRow
 import com.example.ui.components.StatusPill
 import com.example.ui.components.StudioSectionCard
 import com.example.ui.theme.JetBrainsMonoFamily
-import com.example.ui.viewmodel.HistoryPreviewState
+import com.example.ui.viewmodel.SubtitlePreviewState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -81,35 +87,88 @@ private enum class HistoryFilterOption(val label: String) {
 @Composable
 fun HistoryScreen(
   historyItems: List<TranslationHistoryEntity>,
-  previewState: HistoryPreviewState?,
+  previewState: SubtitlePreviewState? = null,
   onOpenPreview: (TranslationHistoryEntity) -> Unit,
-  onClosePreview: () -> Unit,
+  onClosePreview: () -> Unit = {},
   onReSaveToDownloads: (TranslationHistoryEntity) -> Unit,
   onExportToUri: (TranslationHistoryEntity, android.net.Uri?) -> Unit,
   onCreateShareIntent: (TranslationHistoryEntity) -> Intent?,
   onDeleteItem: (TranslationHistoryEntity) -> Unit,
   onClearAllHistory: () -> Unit = {},
+  searchQuery: String? = null,
+  onSearchQueryChange: ((String) -> Unit)? = null,
+  matchedContentSnippets: Map<Long, String>? = null,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
+  val standaloneStorage = remember(context) { SubtitleFileStorage(context) }
   var pendingExportItem by remember { mutableStateOf<TranslationHistoryEntity?>(null) }
   var pendingDeleteItem by remember { mutableStateOf<TranslationHistoryEntity?>(null) }
   var showClearAllDialog by remember { mutableStateOf(false) }
   var selectedFilter by remember { mutableStateOf(HistoryFilterOption.ALL) }
+  var internalSearchQuery by rememberSaveable { mutableStateOf("") }
+  var internalSnippets by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
+
+  val activeQuery = searchQuery ?: internalSearchQuery
+  val updateQuery: (String) -> Unit = { next ->
+    if (onSearchQueryChange != null) {
+      onSearchQueryChange(next)
+    } else {
+      internalSearchQuery = next
+    }
+  }
+
+  LaunchedEffect(historyItems, activeQuery, matchedContentSnippets) {
+    if (matchedContentSnippets != null) return@LaunchedEffect
+    val cleanQuery = activeQuery.trim()
+    if (cleanQuery.isEmpty() || historyItems.isEmpty()) {
+      internalSnippets = emptyMap()
+      return@LaunchedEffect
+    }
+    val resolved = LinkedHashMap<Long, String>()
+    for (item in historyItems) {
+      val snippet =
+        standaloneStorage.findContentMatchSnippet(
+          localBackupPath = item.localBackupPath,
+          contentUri = item.contentUri,
+          originalFileName = item.originalFileName,
+          query = cleanQuery,
+        )
+      if (snippet != null) {
+        resolved[item.id] = snippet
+      }
+    }
+    internalSnippets = resolved
+  }
+
+  val activeSnippets = matchedContentSnippets ?: internalSnippets
 
   val filteredItems =
-    remember(historyItems, selectedFilter) {
-      when (selectedFilter) {
-        HistoryFilterOption.ALL -> historyItems
-        HistoryFilterOption.COMPLETED ->
-          historyItems.filter { it.translationStatus == HistoryTranslationStatus.COMPLETED }
-        HistoryFilterOption.PARTIAL ->
-          historyItems.filter { it.translationStatus == HistoryTranslationStatus.PARTIAL }
-        HistoryFilterOption.FAILED ->
-          historyItems.filter {
-            it.translationStatus == HistoryTranslationStatus.FAILED ||
-              it.translationStatus == HistoryTranslationStatus.ABORTED
-          }
+    remember(historyItems, selectedFilter, activeQuery, activeSnippets) {
+      val statusFiltered =
+        when (selectedFilter) {
+          HistoryFilterOption.ALL -> historyItems
+          HistoryFilterOption.COMPLETED ->
+            historyItems.filter { it.translationStatus == HistoryTranslationStatus.COMPLETED }
+          HistoryFilterOption.PARTIAL ->
+            historyItems.filter { it.translationStatus == HistoryTranslationStatus.PARTIAL }
+          HistoryFilterOption.FAILED ->
+            historyItems.filter {
+              it.translationStatus == HistoryTranslationStatus.FAILED ||
+                it.translationStatus == HistoryTranslationStatus.ABORTED
+            }
+        }
+      val cleanQuery = activeQuery.trim()
+      if (cleanQuery.isEmpty()) {
+        statusFiltered
+      } else {
+        statusFiltered.filter { item ->
+          item.originalFileName.contains(cleanQuery, ignoreCase = true) ||
+            item.outputFileName.contains(cleanQuery, ignoreCase = true) ||
+            item.titleMetadata.contains(cleanQuery, ignoreCase = true) ||
+            item.savedPath.contains(cleanQuery, ignoreCase = true) ||
+            activeSnippets.containsKey(item.id)
+        }
       }
     }
 
@@ -138,7 +197,12 @@ fun HistoryScreen(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
           ) {
             StatusPill(
-              text = "${historyItems.size} file(s)",
+              text =
+                if (filteredItems.size != historyItems.size) {
+                  "${filteredItems.size}/${historyItems.size} file(s)"
+                } else {
+                  "${historyItems.size} file(s)"
+                },
               containerColor = MaterialTheme.colorScheme.surfaceContainer,
               contentColor = MaterialTheme.colorScheme.onSurface,
             )
@@ -159,6 +223,37 @@ fun HistoryScreen(
       )
 
       if (historyItems.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(10.dp))
+        OutlinedTextField(
+          value = activeQuery,
+          onValueChange = updateQuery,
+          placeholder = { Text("Search by filename or subtitle content...") },
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.Rounded.Search,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+          },
+          trailingIcon = {
+            if (activeQuery.isNotEmpty()) {
+              IconButton(
+                onClick = { updateQuery("") },
+                modifier = Modifier.minimumInteractiveComponentSize().testTag("history_search_clear"),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.Close,
+                  contentDescription = "Clear search query",
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier.fillMaxWidth().testTag("history_search_input"),
+        )
+
         Spacer(modifier = Modifier.height(10.dp))
         Row(
           modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -187,23 +282,35 @@ fun HistoryScreen(
         verticalArrangement = Arrangement.Center,
       ) {
         Text(
-          text = "No ${selectedFilter.label} Records",
+          text =
+            if (activeQuery.isNotBlank()) {
+              "No Matching Translated Files"
+            } else {
+              "No ${selectedFilter.label} Records"
+            },
           style = MaterialTheme.typography.titleMedium,
           color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(modifier = Modifier.height(6.dp))
-        TextButton(onClick = { selectedFilter = HistoryFilterOption.ALL }) {
-          Text("Show all history")
+        TextButton(
+          onClick = {
+            updateQuery("")
+            selectedFilter = HistoryFilterOption.ALL
+          },
+          modifier = Modifier.testTag("history_reset_filters_button"),
+        ) {
+          Text(if (activeQuery.isNotBlank()) "Clear search & filters" else "Show all history")
         }
       }
     } else {
       LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag("history_items_list"),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
         items(items = filteredItems, key = { it.id }) { item ->
           HistoryItemCard(
             item = item,
+            matchedContentSnippet = activeSnippets[item.id],
             onPreview = { onOpenPreview(item) },
             onReDownload = { onReSaveToDownloads(item) },
             onExportAs = {
@@ -224,39 +331,6 @@ fun HistoryScreen(
         item { Spacer(modifier = Modifier.height(12.dp)) }
       }
     }
-  }
-
-  previewState?.let { state ->
-    AlertDialog(
-      onDismissRequest = onClosePreview,
-      title = {
-        Text(
-          text = state.item.outputFileName.ifBlank { state.item.originalFileName },
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      },
-      text = {
-        Surface(
-          shape = RoundedCornerShape(10.dp),
-          color = MaterialTheme.colorScheme.surfaceContainerLowest,
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-          modifier = Modifier.fillMaxWidth().height(340.dp),
-        ) {
-          Text(
-            text = state.contentPreview,
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState()),
-          )
-        }
-      },
-      confirmButton = {
-        TextButton(onClick = onClosePreview) {
-          Text("Close")
-        }
-      },
-    )
   }
 
   pendingDeleteItem?.let { item ->
@@ -318,10 +392,13 @@ private fun EmptyHistoryState(modifier: Modifier = Modifier) {
     verticalArrangement = Arrangement.Center,
   ) {
     Image(
-      painter = painterResource(id = R.drawable.img_empty_archive_1795096561835),
+      painter = painterResource(id = R.drawable.img_history_empty_state),
       contentDescription = "No translated subtitles yet",
-      contentScale = ContentScale.Crop,
-      modifier = Modifier.size(width = 240.dp, height = 180.dp).clip(MaterialTheme.shapes.large),
+      contentScale = ContentScale.Fit,
+      modifier =
+        Modifier.size(width = 240.dp, height = 180.dp)
+          .clip(MaterialTheme.shapes.large)
+          .testTag("history_empty_image"),
     )
     Spacer(modifier = Modifier.height(18.dp))
     Text(
@@ -343,6 +420,7 @@ private fun EmptyHistoryState(modifier: Modifier = Modifier) {
 @Composable
 private fun HistoryItemCard(
   item: TranslationHistoryEntity,
+  matchedContentSnippet: String?,
   onPreview: () -> Unit,
   onReDownload: () -> Unit,
   onExportAs: () -> Unit,
@@ -371,7 +449,12 @@ private fun HistoryItemCard(
         MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
     }
 
-  StudioSectionCard {
+  StudioSectionCard(
+    modifier =
+      Modifier.testTag("history_item_card_${item.id}").let { base ->
+        if (hasOutputFile) base.clickable(onClick = onPreview) else base
+      },
+  ) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
@@ -435,6 +518,23 @@ private fun HistoryItemCard(
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
+    }
+    if (!matchedContentSnippet.isNullOrBlank()) {
+      Spacer(modifier = Modifier.height(6.dp))
+      Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth().testTag("history_content_match_${item.id}"),
+      ) {
+        Text(
+          text = "Match: \"$matchedContentSnippet\"",
+          style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
+          color = MaterialTheme.colorScheme.onPrimaryContainer,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+        )
+      }
     }
     Text(
       text = "${item.modelUsed} • $dateText",

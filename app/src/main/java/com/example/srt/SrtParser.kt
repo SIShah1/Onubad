@@ -62,6 +62,40 @@ data class SrtItem(
   }
 }
 
+data class ParsedSrtDocument(
+  val items: List<SrtItem>,
+  val blocks: List<SrtBlock>,
+  val isValid: Boolean,
+  val totalBlocks: Int = items.size,
+  val totalLines: Int = items.sumOf { item -> item.lines.count { it.isNotBlank() } },
+)
+
+class SrtFileParser {
+  fun parseText(rawContent: String): List<SrtItem> = SrtParser.parse(rawContent)
+
+  fun parseFile(file: File): List<SrtItem> = SrtParser.parse(file)
+
+  fun parsePath(filePath: String): List<SrtItem> = SrtParser.parse(File(filePath))
+
+  fun parseStream(inputStream: InputStream): List<SrtItem> = SrtParser.parse(inputStream)
+
+  fun parseUri(context: Context, uri: Uri): List<SrtItem> = SrtParser.parse(context, uri)
+
+  fun parseDocument(rawContent: String): ParsedSrtDocument = SrtParser.parseDocument(rawContent)
+
+  fun parseDocument(file: File): ParsedSrtDocument = SrtParser.parseDocument(file)
+
+  fun toBlocks(items: List<SrtItem>): List<SrtBlock> = items.map { it.toSrtBlock() }
+
+  fun reconstruct(
+    originalItems: List<SrtItem>,
+    bengaliTranslations: Map<Int, String>,
+    fallbackToOriginal: Boolean = true,
+  ): String = SrtParser.reconstruct(originalItems, bengaliTranslations, fallbackToOriginal)
+
+  fun format(items: List<SrtItem>): String = SrtParser.format(items)
+}
+
 object SrtParser {
 
   private val TIMECODE_LINE_REGEX =
@@ -153,6 +187,24 @@ object SrtParser {
 
   fun parseBlocks(rawContent: String): List<SrtBlock> {
     return parse(rawContent).map { it.toSrtBlock() }
+  }
+
+  fun parseDocument(rawContent: String): ParsedSrtDocument {
+    val items = parse(rawContent)
+    return ParsedSrtDocument(
+      items = items,
+      blocks = items.map { it.toSrtBlock() },
+      isValid = items.isNotEmpty(),
+    )
+  }
+
+  fun parseDocument(file: File): ParsedSrtDocument {
+    val items = parse(file)
+    return ParsedSrtDocument(
+      items = items,
+      blocks = items.map { it.toSrtBlock() },
+      isValid = items.isNotEmpty(),
+    )
   }
 
   fun isValidTimecodeLine(timestampLine: String): Boolean {

@@ -457,6 +457,13 @@ class TranslationCoordinator(
           strictTimecodeCheck = true,
         )
       val savedOutput = fileStorage.saveTranslatedSrt(expectedOutputName, formattedSrt)
+      runCatching {
+        fileStorage.saveOriginalSourceBackup(
+          translatedLocalBackupPath = savedOutput.localBackupPath,
+          originalFileName = file.fileName,
+          blocks = segmentedPlan.parsedBlocks,
+        )
+      }
 
       historyRepository.markCompleted(
         historyId = historyId,
@@ -524,6 +531,13 @@ class TranslationCoordinator(
             baseOutputName + "_partial.srt"
           }
         val savedOutput = fileStorage.saveTranslatedSrt(partialName, formattedSrt)
+        runCatching {
+          fileStorage.saveOriginalSourceBackup(
+            translatedLocalBackupPath = savedOutput.localBackupPath,
+            originalFileName = file.fileName,
+            blocks = file.blocks,
+          )
+        }
         historyRepository.markPartial(
           historyId = historyId,
           outputFileName = savedOutput.outputFileName,

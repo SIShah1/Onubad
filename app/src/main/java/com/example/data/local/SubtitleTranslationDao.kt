@@ -61,6 +61,15 @@ interface SubtitleTranslationDao {
   @Query("SELECT * FROM subtitle_translations WHERE id = :id LIMIT 1")
   suspend fun getById(id: Long): SubtitleTranslation?
 
+  @Query("SELECT jobId FROM subtitle_translations WHERE fileName = :fileName ORDER BY id DESC LIMIT 1")
+  suspend fun getLatestJobIdForFileName(fileName: String): String?
+
+  @Query("SELECT * FROM subtitle_translations WHERE jobId = :jobId ORDER BY blockIndex ASC, id ASC")
+  suspend fun getByJobIdOnce(jobId: String): List<SubtitleTranslation>
+
+  @Query("SELECT * FROM subtitle_translations WHERE fileName = :fileName ORDER BY blockIndex ASC, id ASC")
+  suspend fun getByFileNameOnce(fileName: String): List<SubtitleTranslation>
+
   @Query("SELECT COUNT(*) FROM subtitle_translations WHERE jobId = :jobId AND status = :status")
   fun observeCountByStatus(jobId: String, status: SubtitleTranslationStatus): Flow<Int>
 

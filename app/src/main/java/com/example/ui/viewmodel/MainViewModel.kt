@@ -22,9 +22,12 @@ import com.example.domain.model.SelectedSubtitleFile
 import com.example.domain.model.ThemeMode
 import com.example.domain.model.TranslationJobRequest
 import com.example.domain.model.TranslationSessionState
+import com.example.srt.SrtItem
+import com.example.srt.SrtParser
 import com.example.worker.TranslationWorkScheduler
 import androidx.work.WorkInfo
 import java.util.UUID
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,10 +61,30 @@ data class StudioFormState(
     get() = activeFiles.sumOf { it.fileSizeBytes }
 }
 
-data class HistoryPreviewState(
-  val item: TranslationHistoryEntity,
-  val contentPreview: String,
+data class SubtitleCuePair(
+  val index: Int,
+  val timestamp: String,
+  val englishText: String,
+  val bengaliText: String,
+  val isTranslated: Boolean,
 )
+
+data class SubtitlePreviewState(
+  val fileName: String,
+  val sourceFileName: String,
+  val subtitleMeta: String,
+  val cues: List<SubtitleCuePair>,
+  val hasOriginalText: Boolean,
+  val historyItem: TranslationHistoryEntity? = null,
+  val isLoading: Boolean = false,
+  val emptyMessage: String? = null,
+) {
+  val translatedCount: Int
+    get() = cues.count { it.isTranslated }
+
+  val totalCount: Int
+    get() = cues.size
+}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -132,11 +155,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   private val _studioForm = MutableStateFlow(StudioFormState())
   val studioForm: StateFlow<StudioFormState> = _studioForm.asStateFlow()
 
-  private val _previewState = MutableStateFlow<HistoryPreviewState?>(null)
-  val previewState: StateFlow<HistoryPreviewState?> = _previewState.asStateFlow()
+  private val _previewState = MutableStateFlow<SubtitlePreviewState?>(null)
+  val previewState: StateFlow<SubtitlePreviewState?> = _previewState.asStateFlow()
+
+  private val _historySearchQuery = MutableStateFlow("")
+  val historySearchQuery: StateFlow<String> = _historySearchQuery.asStateFlow()
+
+  private val _historyContentSnippets = MutableStateFlow<Map<Long, String>>(emptyMap())
+  val historyContentSnippets: StateFlow<Map<Long, String>> = _historyContentSnippets.asStateFlow()
+
+  private var historySearchJob: Job? = null
 
   private val _uiMessages = MutableSharedFlow<String>(extraBufferCapacity = 8)
   val uiMessages = _uiMessages.asSharedFlow()
+
+  init {
+    viewModelScope.launch {
+      historyItems.collect { items ->
+        val q = _historySearchQuery.value.trim()
+        if (q.isNotEmpty()) {
+          runHistoryContentSearch(q, items)
+        }
+      }
+    }
+  }
 
   // --- Studio Form Actions ---
 
@@ -164,6 +206,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     if (uri == null) return
     viewModelScope.launch {
       _studioForm.update { it.copy(isAnalyzingFiles = true) }
+      fileStorage.takePersistableReadPermission(uri)
       val analyzed = fileStorage.readAndAnalyzeUri(uri)
       if (analyzed == null) {
         _uiMessages.emit("Unable to read the selected subtitle file.")
@@ -193,6 +236,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
       _studioForm.update { it.copy(isAnalyzingFiles = true) }
       val analyzedList = ArrayList<SelectedSubtitleFile>(uris.size)
       for (uri in uris) {
+        fileStorage.takePersistableReadPermission(uri)
         val analyzed = fileStorage.readAndAnalyzeUri(uri)
         if (analyzed != null && analyzed.totalBlocks > 0) {
           analyzedList.add(analyzed)
@@ -297,6 +341,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiMessages.emit("Saved $added new API key(s) securely.")
       } else {
         _uiMessages.emit("No new valid API keys found to add.")
+      }
+    }
+  }
+
+  fun importApiKeysFromUri(uri: Uri?) {
+    if (uri == null) return
+    viewModelScope.launch {
+      fileStorage.takePersistableReadPermission(uri)
+      val rawText = fileStorage.readPlainText(uri)
+      if (rawText.isNullOrBlank()) {
+        _uiMessages.emit("Unable to read API keys from the selected file.")
+        return@launch
+      }
+      val added = keyStorage.addBulkKeys(rawText)
+      if (added > 0) {
+        _uiMessages.emit("Imported $added new Gemini API key(s) from file.")
+      } else {
+        _uiMessages.emit("No new valid Gemini API keys found in the selected file.")
       }
     }
   }
@@ -445,21 +507,224 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
   // --- History & Export ---
 
-  fun openHistoryPreview(item: TranslationHistoryEntity) {
-    viewModelScope.launch {
-      val raw = fileStorage.readPreviewText(item.localBackupPath, item.contentUri)
-      val preview =
-        if (raw.isBlank()) {
-          "Subtitle preview is unavailable."
-        } else {
-          raw.take(6000)
+  fun updateHistorySearchQuery(query: String) {
+    _historySearchQuery.value = query
+    val cleanQuery = query.trim()
+    if (cleanQuery.isEmpty()) {
+      historySearchJob?.cancel()
+      _historyContentSnippets.value = emptyMap()
+      return
+    }
+    runHistoryContentSearch(cleanQuery, historyItems.value)
+  }
+
+  private fun runHistoryContentSearch(query: String, items: List<TranslationHistoryEntity>) {
+    historySearchJob?.cancel()
+    historySearchJob =
+      viewModelScope.launch {
+        val matches = LinkedHashMap<Long, String>()
+        for (item in items) {
+          val snippet =
+            fileStorage.findContentMatchSnippet(
+              localBackupPath = item.localBackupPath,
+              contentUri = item.contentUri,
+              originalFileName = item.originalFileName,
+              query = query,
+            )
+          if (snippet != null) {
+            matches[item.id] = snippet
+          }
         }
-      _previewState.value = HistoryPreviewState(item = item, contentPreview = preview)
+        if (_historySearchQuery.value.trim() == query) {
+          _historyContentSnippets.value = matches
+        }
+      }
+  }
+
+  fun openHistoryPreview(item: TranslationHistoryEntity) {
+    val displayName = item.outputFileName.ifBlank { item.originalFileName }
+    _previewState.value =
+      SubtitlePreviewState(
+        fileName = displayName,
+        sourceFileName = item.originalFileName,
+        subtitleMeta = "${item.titleMetadata} • ${item.mode}",
+        cues = emptyList(),
+        hasOriginalText = true,
+        historyItem = item,
+        isLoading = true,
+      )
+    viewModelScope.launch {
+      val translatedRaw = fileStorage.readPreviewText(item.localBackupPath, item.contentUri)
+      val translatedItems =
+        if (translatedRaw.isNotBlank()) SrtParser.parse(translatedRaw) else emptyList()
+
+      val roomRows = subtitleTranslationRepo.getLatestForFile(item.originalFileName)
+      val activeSelected =
+        _studioForm.value.activeFiles.firstOrNull { it.fileName == item.originalFileName }
+      val originalBackupRaw =
+        fileStorage.readOriginalSourceBackup(item.localBackupPath, item.originalFileName)
+      val originalBackupItems =
+        if (originalBackupRaw.isNotBlank()) SrtParser.parse(originalBackupRaw) else emptyList()
+
+      val originalItems: List<SrtItem> =
+        when {
+          originalBackupItems.isNotEmpty() -> originalBackupItems
+          activeSelected != null && activeSelected.blocks.isNotEmpty() ->
+            activeSelected.blocks.map {
+              SrtItem(it.index, it.timestamp, it.lines.joinToString("\n"))
+            }
+          roomRows.isNotEmpty() ->
+            roomRows.map { SrtItem(it.blockIndex, it.timestamp, it.originalEnglishText) }
+          else -> emptyList()
+        }
+
+      val (cues, hasOriginal) =
+        buildPairedSubtitleCues(
+          originalItems = originalItems,
+          translatedItems = translatedItems,
+          roomRows = roomRows,
+        )
+
+      _previewState.value =
+        SubtitlePreviewState(
+          fileName = displayName,
+          sourceFileName = item.originalFileName,
+          subtitleMeta = "${item.titleMetadata} • ${item.mode}",
+          cues = cues,
+          hasOriginalText = hasOriginal,
+          historyItem = item,
+          isLoading = false,
+          emptyMessage = if (cues.isEmpty()) "Subtitle preview is unavailable." else null,
+        )
+    }
+  }
+
+  fun openStudioFilePreview(fileName: String, selectedFile: SelectedSubtitleFile? = null) {
+    viewModelScope.launch {
+      val resolvedSelected =
+        selectedFile ?: _studioForm.value.activeFiles.firstOrNull { it.fileName == fileName }
+      val roomRows = subtitleTranslationRepo.getLatestForFile(fileName)
+      val matchingHistory =
+        historyItems.value.firstOrNull {
+          (it.originalFileName == fileName || it.outputFileName == fileName) &&
+            (it.localBackupPath.isNotBlank() || it.contentUri.isNotBlank())
+        }
+
+      if (roomRows.isEmpty() && matchingHistory != null) {
+        openHistoryPreview(matchingHistory)
+        return@launch
+      }
+
+      val translatedRaw =
+        if (matchingHistory != null) {
+          fileStorage.readPreviewText(matchingHistory.localBackupPath, matchingHistory.contentUri)
+        } else {
+          ""
+        }
+      val translatedItems =
+        if (translatedRaw.isNotBlank()) SrtParser.parse(translatedRaw) else emptyList()
+
+      val originalItems: List<SrtItem> =
+        when {
+          resolvedSelected != null && resolvedSelected.blocks.isNotEmpty() ->
+            resolvedSelected.blocks.map {
+              SrtItem(it.index, it.timestamp, it.lines.joinToString("\n"))
+            }
+          roomRows.isNotEmpty() ->
+            roomRows.map { SrtItem(it.blockIndex, it.timestamp, it.originalEnglishText) }
+          else -> emptyList()
+        }
+
+      val (cues, hasOriginal) =
+        buildPairedSubtitleCues(
+          originalItems = originalItems,
+          translatedItems = translatedItems,
+          roomRows = roomRows,
+        )
+
+      if (cues.isEmpty()) {
+        _uiMessages.emit("No translated preview available yet for $fileName.")
+        return@launch
+      }
+
+      _previewState.value =
+        SubtitlePreviewState(
+          fileName = matchingHistory?.outputFileName?.ifBlank { fileName } ?: fileName,
+          sourceFileName = fileName,
+          subtitleMeta = matchingHistory?.let { "${it.titleMetadata} • ${it.mode}" }
+            ?: "Studio Queue Preview",
+          cues = cues,
+          hasOriginalText = hasOriginal,
+          historyItem = matchingHistory,
+          isLoading = false,
+        )
     }
   }
 
   fun closeHistoryPreview() {
     _previewState.value = null
+  }
+
+  private fun buildPairedSubtitleCues(
+    originalItems: List<SrtItem>,
+    translatedItems: List<SrtItem>,
+    roomRows: List<SubtitleTranslation>,
+  ): Pair<List<SubtitleCuePair>, Boolean> {
+    val translatedByIndex = translatedItems.associateBy { it.index }
+    val roomByIndex = roomRows.associateBy { it.blockIndex }
+
+    if (originalItems.isNotEmpty()) {
+      val pairs =
+        originalItems.map { orig ->
+          val trans = translatedByIndex[orig.index]
+          val room = roomByIndex[orig.index]
+          val bengali =
+            trans?.content?.takeIf { it.isNotBlank() }
+              ?: room?.translatedBengaliText?.takeIf { it.isNotBlank() }.orEmpty()
+          val translatedFlag =
+            (trans != null && trans.content.isNotBlank()) ||
+              (room?.status == SubtitleTranslationStatus.TRANSLATED &&
+                !room.translatedBengaliText.isNullOrBlank())
+          SubtitleCuePair(
+            index = orig.index,
+            timestamp = orig.timestamp,
+            englishText = orig.content,
+            bengaliText = bengali,
+            isTranslated = translatedFlag,
+          )
+        }
+      return pairs to true
+    }
+
+    if (roomRows.isNotEmpty()) {
+      val pairs =
+        roomRows.sortedBy { it.blockIndex }.map { row ->
+          val trans = translatedByIndex[row.blockIndex]
+          val bengali =
+            row.translatedBengaliText?.takeIf { it.isNotBlank() }
+              ?: trans?.content?.takeIf { it.isNotBlank() }.orEmpty()
+          SubtitleCuePair(
+            index = row.blockIndex,
+            timestamp = row.timestamp,
+            englishText = row.originalEnglishText,
+            bengaliText = bengali,
+            isTranslated = bengali.isNotBlank(),
+          )
+        }
+      return pairs to true
+    }
+
+    val fallbackPairs =
+      translatedItems.map { trans ->
+        SubtitleCuePair(
+          index = trans.index,
+          timestamp = trans.timestamp,
+          englishText = "",
+          bengaliText = trans.content,
+          isTranslated = trans.content.isNotBlank(),
+        )
+      }
+    return fallbackPairs to false
   }
 
   fun reSaveToDownloads(item: TranslationHistoryEntity) {

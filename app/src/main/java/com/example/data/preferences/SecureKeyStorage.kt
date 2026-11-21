@@ -284,8 +284,8 @@ class SecureKeyStorage(private val context: Context) {
 
     fun parseBulkKeys(rawInput: String): List<String> {
       return rawInput
-        .split(Regex("""[\s,;]+"""))
-        .map { it.trim().trim('"', '\'', '`') }
+        .split(Regex("""[\s,;=]+"""))
+        .map { it.trim().trim('"', '\'', '`', '[', ']', '{', '}') }
         .filter { it.length >= 16 }
         .distinct()
     }

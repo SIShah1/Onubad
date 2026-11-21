@@ -2,11 +2,11 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,13 +19,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -33,21 +29,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Preview
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Subtitles
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tv
-import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -65,7 +56,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -84,20 +74,18 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.work.WorkInfo
 import com.example.data.local.FileTranslationProgress
 import com.example.data.local.RoomTranslationProgress
+import com.example.data.storage.SubtitleFileStorage
 import com.example.domain.model.ApiKeyEntry
 import com.example.domain.model.ApiKeyStatus
 import com.example.domain.model.AppSettings
 import com.example.domain.model.InputMode
-import com.example.domain.model.LogLevel
-import com.example.domain.model.ProcessingLogEntry
 import com.example.domain.model.SelectedSubtitleFile
 import com.example.domain.model.TranslationSessionState
-import com.example.domain.model.TranslationStatus
 import com.example.srt.SrtEngine
 import com.example.ui.components.SectionTitleRow
-import com.example.ui.components.StatusPill
 import com.example.ui.components.StudioSectionCard
 import com.example.ui.theme.BSubShape
 import com.example.ui.theme.CloverCoral
@@ -112,7 +100,6 @@ import com.example.ui.theme.LocalThemeController
 import com.example.ui.theme.PlusJakartaFamily
 import com.example.ui.theme.SpaceGroteskFamily
 import com.example.ui.viewmodel.StudioFormState
-import java.util.Locale
 import kotlin.math.ceil
 
 @Composable
@@ -123,19 +110,23 @@ fun StudioScreen(
   sessionState: TranslationSessionState,
   roomProgress: RoomTranslationProgress = RoomTranslationProgress(),
   fileProgressList: List<FileTranslationProgress> = emptyList(),
+  workInfos: List<WorkInfo> = emptyList(),
   onInputModeChange: (InputMode) -> Unit,
   onMovieNameChange: (String) -> Unit,
   onReleaseYearChange: (String) -> Unit,
   onSeriesNameChange: (String) -> Unit,
   onSeasonChange: (String) -> Unit,
-  onSingleSrtPicked: (android.net.Uri?) -> Unit,
-  onMultipleSrtPicked: (List<android.net.Uri>) -> Unit,
+  onSingleSrtPicked: (Uri?) -> Unit,
+  onMultipleSrtPicked: (List<Uri>) -> Unit,
   onRemoveFile: (String) -> Unit,
   onMoveSeriesFile: (Int, Int) -> Unit,
   onClearFiles: () -> Unit,
   onStartTranslation: () -> Unit,
   onAbortTranslation: () -> Unit,
   onClearLogs: () -> Unit,
+  onImportBulkKeys: (String) -> Unit = {},
+  onImportKeysFile: (Uri?) -> Unit = {},
+  onPreviewFile: (String, SelectedSubtitleFile?) -> Unit = { _, _ -> },
   onNavigateToKeys: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -149,6 +140,11 @@ fun StudioScreen(
   val multiSrtLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
       onMultipleSrtPicked(uris)
+    }
+
+  val keyFileLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      onImportKeysFile(uri)
     }
 
   val notificationPermissionLauncher =
@@ -267,7 +263,7 @@ fun StudioScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         FilledTonalButton(
-          onClick = { singleSrtLauncher.launch(arrayOf("*/*")) },
+          onClick = { singleSrtLauncher.launch(SubtitleFileStorage.SRT_PICKER_MIME_TYPES) },
           enabled = !isRunning && !formState.isAnalyzingFiles,
           shape = RoundedCornerShape(14.dp),
           colors = tonalPickerColors,
@@ -316,7 +312,7 @@ fun StudioScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         FilledTonalButton(
-          onClick = { multiSrtLauncher.launch(arrayOf("*/*")) },
+          onClick = { multiSrtLauncher.launch(SubtitleFileStorage.SRT_PICKER_MIME_TYPES) },
           enabled = !isRunning && !formState.isAnalyzingFiles,
           shape = RoundedCornerShape(14.dp),
           colors = tonalPickerColors,
@@ -351,52 +347,31 @@ fun StudioScreen(
       }
     }
 
-    // 3. Analyzed Subtitle Counter & File Queue
+    // 3. Analyzed Subtitle Counter & File Queue with Live Status Badges
     AnimatedVisibility(visible = formState.activeFiles.isNotEmpty()) {
       SubtitleAnalysisCard(
         formState = formState,
         chunkSize = settings.effectiveChunkSize,
         isRunning = isRunning,
+        sessionState = sessionState,
+        fileProgressList = fileProgressList,
         onRemoveFile = onRemoveFile,
         onMoveSeriesFile = onMoveSeriesFile,
         onClearFiles = onClearFiles,
+        onPreviewFile = onPreviewFile,
       )
     }
 
-    // 4. API Key Warning Banner if empty
-    if (apiKeys.isEmpty()) {
-      Surface(
-        modifier =
-          Modifier.fillMaxWidth().clickable(onClick = onNavigateToKeys).testTag("missing_keys_banner"),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-      ) {
-        Row(
-          modifier = Modifier.padding(14.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Icon(
-            imageVector = Icons.Rounded.WarningAmber,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.error,
-          )
-          Spacer(modifier = Modifier.width(12.dp))
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "No Gemini API Keys Saved",
-              style = MaterialTheme.typography.titleSmall,
-              color = MaterialTheme.colorScheme.onErrorContainer,
-            )
-            Text(
-              text = "Tap to open API Key Manager and paste your keys.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
-            )
-          }
-        }
-      }
-    }
+    // 4. Bulk Gemini API Key Import (Manual Paste or Text File)
+    StudioBulkKeyImportCard(
+      apiKeys = apiKeys,
+      isRunning = isRunning,
+      onImportBulkKeys = onImportBulkKeys,
+      onLaunchKeyFilePicker = {
+        keyFileLauncher.launch(SubtitleFileStorage.TEXT_KEY_FILE_MIME_TYPES)
+      },
+      onNavigateToKeys = onNavigateToKeys,
+    )
 
     // 5. Primary Start / Abort Action Row
     Row(
@@ -466,12 +441,15 @@ fun StudioScreen(
       }
     }
 
-    // 6. Live Processing Status, Room DB Progress & Persistent Logs
+    // 6. Live Processing Status, Multi-File WorkManager Dashboard & Logs
     LiveProcessingSection(
       sessionState = sessionState,
       roomProgress = roomProgress,
       fileProgressList = fileProgressList,
+      queuedFiles = formState.activeFiles,
+      workInfos = workInfos,
       onClearLogs = onClearLogs,
+      onPreviewFile = onPreviewFile,
     )
 
     Spacer(modifier = Modifier.height(12.dp))
@@ -759,9 +737,12 @@ private fun SubtitleAnalysisCard(
   formState: StudioFormState,
   chunkSize: Int,
   isRunning: Boolean,
+  sessionState: TranslationSessionState,
+  fileProgressList: List<FileTranslationProgress>,
   onRemoveFile: (String) -> Unit,
   onMoveSeriesFile: (Int, Int) -> Unit,
   onClearFiles: () -> Unit,
+  onPreviewFile: (String, SelectedSubtitleFile?) -> Unit = { _, _ -> },
 ) {
   val files = formState.activeFiles
   val totalBatches =
@@ -819,13 +800,25 @@ private fun SubtitleAnalysisCard(
     Spacer(modifier = Modifier.height(10.dp))
 
     files.forEachIndexed { idx, file ->
+      val resolvedProgress =
+        resolveFileQueueProgress(
+          index = idx,
+          file = file,
+          fileProgressList = fileProgressList,
+          sessionState = sessionState,
+        )
+      val canPreview =
+        resolvedProgress.status == FileQueueStatus.COMPLETED || resolvedProgress.translatedBlocks > 0
       FileQueueRow(
         index = idx,
         totalCount = files.size,
         file = file,
         chunkSize = chunkSize,
+        resolvedProgress = resolvedProgress,
         isSeriesMode = formState.inputMode == InputMode.SERIES,
         isRunning = isRunning,
+        canPreview = canPreview,
+        onPreview = { onPreviewFile(file.fileName, file) },
         onMoveUp = { onMoveSeriesFile(idx, -1) },
         onMoveDown = { onMoveSeriesFile(idx, 1) },
         onRemove = { onRemoveFile(file.id) },
@@ -838,7 +831,7 @@ private fun SubtitleAnalysisCard(
 }
 
 @Composable
-private fun MetricTile(
+internal fun MetricTile(
   label: String,
   value: String,
   modifier: Modifier = Modifier,
@@ -877,14 +870,21 @@ private fun FileQueueRow(
   totalCount: Int,
   file: SelectedSubtitleFile,
   chunkSize: Int,
+  resolvedProgress: ResolvedFileProgress,
   isSeriesMode: Boolean,
   isRunning: Boolean,
+  canPreview: Boolean,
+  onPreview: () -> Unit,
   onMoveUp: () -> Unit,
   onMoveDown: () -> Unit,
   onRemove: () -> Unit,
 ) {
   val batches = if (file.totalBlocks == 0) 0 else ceil(file.totalBlocks.toDouble() / chunkSize).toInt()
   Surface(
+    modifier =
+      Modifier.clip(RoundedCornerShape(12.dp))
+        .let { base -> if (canPreview) base.clickable(onClick = onPreview) else base }
+        .testTag("file_queue_item_$index"),
     shape = RoundedCornerShape(12.dp),
     color = MaterialTheme.colorScheme.surfaceContainerLow,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -893,6 +893,13 @@ private fun FileQueueRow(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
+      FileStatusIndicator(
+        status = resolvedProgress.status,
+        progressFraction = resolvedProgress.progressFraction,
+        modifier = Modifier.testTag("file_status_indicator_$index"),
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+
       if (isSeriesMode) {
         Surface(
           shape = RoundedCornerShape(8.dp),
@@ -924,6 +931,35 @@ private fun FileQueueRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          FileStatusBadge(
+            status = resolvedProgress.status,
+            modifier = Modifier.testTag("file_status_badge_$index"),
+          )
+          if (canPreview) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.testTag("file_preview_hint_$index"),
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.Preview,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp),
+              )
+              Spacer(modifier = Modifier.width(4.dp))
+              Text(
+                text = "Tap to preview",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+              )
+            }
+          }
+        }
       }
 
       if (!isRunning) {
@@ -964,372 +1000,5 @@ private fun FileQueueRow(
         }
       }
     }
-  }
-}
-
-@Composable
-private fun LiveProcessingSection(
-  sessionState: TranslationSessionState,
-  roomProgress: RoomTranslationProgress,
-  fileProgressList: List<FileTranslationProgress>,
-  onClearLogs: () -> Unit,
-) {
-  val hasRoomData = roomProgress.totalBlocks > 0
-  val targetFraction =
-    if (hasRoomData) roomProgress.progressFraction else sessionState.overallProgressFraction
-  val animatedProgress by
-    animateFloatAsState(
-      targetValue = targetFraction,
-      label = "translation_progress",
-    )
-  val percentInt = (animatedProgress * 100f).toInt().coerceIn(0, 100)
-  val logListState = rememberLazyListState()
-
-  LaunchedEffect(sessionState.logs.size) {
-    if (sessionState.logs.isNotEmpty()) {
-      logListState.animateScrollToItem(sessionState.logs.lastIndex)
-    }
-  }
-
-  StudioSectionCard(
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    borderColor =
-      when (sessionState.status) {
-        TranslationStatus.RUNNING -> MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-        TranslationStatus.COOLDOWN -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)
-        TranslationStatus.COMPLETED -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f)
-        TranslationStatus.FAILED,
-        TranslationStatus.ABORTED -> MaterialTheme.colorScheme.error.copy(alpha = 0.45f)
-        TranslationStatus.IDLE -> MaterialTheme.colorScheme.outlineVariant
-      },
-  ) {
-    SectionTitleRow(
-      title = "Processing Status & Logs",
-      subtitle =
-        if (sessionState.status == TranslationStatus.IDLE && hasRoomData) {
-          "Room DB synced: ${roomProgress.translatedBlocks}/${roomProgress.totalBlocks} blocks translated"
-        } else {
-          sessionState.activePhaseMessage
-        },
-      icon = Icons.Rounded.Terminal,
-      trailing = {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          StatusPill(
-            text = sessionState.status.name,
-            containerColor =
-              when (sessionState.status) {
-                TranslationStatus.RUNNING -> MaterialTheme.colorScheme.primaryContainer
-                TranslationStatus.COOLDOWN -> MaterialTheme.colorScheme.secondaryContainer
-                TranslationStatus.COMPLETED -> MaterialTheme.colorScheme.tertiaryContainer
-                TranslationStatus.ABORTED,
-                TranslationStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
-                TranslationStatus.IDLE -> MaterialTheme.colorScheme.surfaceContainer
-              },
-            contentColor =
-              when (sessionState.status) {
-                TranslationStatus.RUNNING -> MaterialTheme.colorScheme.onPrimaryContainer
-                TranslationStatus.COOLDOWN -> MaterialTheme.colorScheme.onSecondaryContainer
-                TranslationStatus.COMPLETED -> MaterialTheme.colorScheme.onTertiaryContainer
-                TranslationStatus.ABORTED,
-                TranslationStatus.FAILED -> MaterialTheme.colorScheme.onErrorContainer
-                TranslationStatus.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
-              },
-          )
-          if (sessionState.logs.isNotEmpty() || (hasRoomData && !sessionState.isRunningOrCooldown)) {
-            IconButton(
-              onClick = onClearLogs,
-              modifier = Modifier.minimumInteractiveComponentSize().testTag("clear_logs_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.DeleteSweep,
-                contentDescription = "Clear processing logs",
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          }
-        }
-      },
-    )
-
-    Spacer(modifier = Modifier.height(12.dp))
-
-    // Room-Backed SRT Progress Card
-    Surface(
-      modifier = Modifier.fillMaxWidth().testTag("room_progress_card"),
-      shape = RoundedCornerShape(14.dp),
-      color = MaterialTheme.colorScheme.surfaceContainerLow,
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-      Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              imageVector = Icons.Rounded.Storage,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              text =
-                if (hasRoomData) {
-                  "${roomProgress.translatedBlocks}/${roomProgress.totalBlocks} blocks processed"
-                } else if (sessionState.totalFiles > 0) {
-                  "Files: ${sessionState.completedFiles}/${sessionState.totalFiles} queued"
-                } else {
-                  "No active SRT translation job"
-                },
-              style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag("room_progress_counts"),
-            )
-          }
-          Spacer(modifier = Modifier.width(8.dp))
-          Text(
-            text = "$percentInt%",
-            style =
-              MaterialTheme.typography.labelMedium.copy(
-                fontWeight = FontWeight.Bold,
-                fontFamily = JetBrainsMonoFamily,
-              ),
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.testTag("room_progress_percent"),
-          )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-        LinearProgressIndicator(
-          progress = { animatedProgress },
-          color = MaterialTheme.colorScheme.primary,
-          trackColor = MaterialTheme.colorScheme.primaryContainer,
-          modifier =
-            Modifier.fillMaxWidth()
-              .height(9.dp)
-              .clip(RoundedCornerShape(50))
-              .testTag("room_translation_progress_bar"),
-        )
-
-        if (hasRoomData) {
-          Spacer(modifier = Modifier.height(10.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Surface(
-              modifier = Modifier.testTag("room_translated_count_pill"),
-              shape = RoundedCornerShape(50),
-              color = MaterialTheme.colorScheme.tertiaryContainer,
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Icon(
-                  imageVector = Icons.Rounded.CheckCircle,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                  modifier = Modifier.size(13.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                  text = "Translated: ${roomProgress.translatedBlocks}",
-                  style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                  color = MaterialTheme.colorScheme.onTertiaryContainer,
-                )
-              }
-            }
-
-            Surface(
-              modifier = Modifier.testTag("room_pending_count_pill"),
-              shape = RoundedCornerShape(50),
-              color = MaterialTheme.colorScheme.secondaryContainer,
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Icon(
-                  imageVector = Icons.Rounded.Schedule,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                  modifier = Modifier.size(13.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                  text = "Pending: ${roomProgress.pendingBlocks}",
-                  style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                  color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-              }
-            }
-          }
-
-          if (fileProgressList.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-              fileProgressList.forEach { fileProgress ->
-                val animatedFileProgress by
-                  animateFloatAsState(
-                    targetValue = fileProgress.progressFraction,
-                    label = "file_progress_${fileProgress.jobId}",
-                  )
-                Column(modifier = Modifier.fillMaxWidth()) {
-                  Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                  ) {
-                    Text(
-                      text = fileProgress.fileName,
-                      style = MaterialTheme.typography.labelSmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      maxLines = 1,
-                      overflow = TextOverflow.Ellipsis,
-                      modifier = Modifier.weight(1f),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                      text =
-                        "${fileProgress.translatedBlocks}/${fileProgress.totalBlocks} (${fileProgress.progressPercent}%)",
-                      style =
-                        MaterialTheme.typography.labelSmall.copy(
-                          fontFamily = JetBrainsMonoFamily,
-                        ),
-                      color = MaterialTheme.colorScheme.primary,
-                    )
-                  }
-                  Spacer(modifier = Modifier.height(4.dp))
-                  LinearProgressIndicator(
-                    progress = { animatedFileProgress },
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(50)),
-                  )
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if (sessionState.totalFiles > 0) {
-      Spacer(modifier = Modifier.height(10.dp))
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        MetricTile(
-          label = "File",
-          value = "${sessionState.currentFileIndex}/${sessionState.totalFiles}",
-          modifier = Modifier.weight(1f),
-        )
-        MetricTile(
-          label = "Batch",
-          value = "${sessionState.currentBatchNumber}/${sessionState.totalBatchesInCurrentFile.coerceAtLeast(1)}",
-          modifier = Modifier.weight(1f),
-        )
-        MetricTile(
-          label = "API Key",
-          value = if (sessionState.currentKeyNumber > 0) "#${sessionState.currentKeyNumber}" else "-",
-          modifier = Modifier.weight(1f),
-        )
-        MetricTile(
-          label = if (sessionState.status == TranslationStatus.COOLDOWN) "Cooldown" else "Attempt",
-          value =
-            if (sessionState.status == TranslationStatus.COOLDOWN) {
-              val m = sessionState.cooldownRemainingSeconds / 60
-              val s = sessionState.cooldownRemainingSeconds % 60
-              String.format(Locale.US, "%02d:%02d", m, s)
-            } else {
-              "${sessionState.currentAttempt}/${sessionState.maxAttempts}"
-            },
-          modifier = Modifier.weight(1f),
-        )
-      }
-    }
-
-    Spacer(modifier = Modifier.height(12.dp))
-
-    val isDarkTheme = LocalThemeController.current.isDarkTheme
-    val logContainerColor =
-      if (isDarkTheme) MaterialTheme.colorScheme.surfaceContainerHighest
-      else MaterialTheme.colorScheme.surfaceContainerLow
-
-    // Persistent Console Log Window
-    Surface(
-      modifier =
-        Modifier.fillMaxWidth()
-          .heightIn(min = 120.dp, max = 240.dp)
-          .testTag("processing_log_container"),
-      shape = RoundedCornerShape(14.dp),
-      color = logContainerColor,
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-      if (sessionState.logs.isEmpty()) {
-        Box(
-          modifier = Modifier.fillMaxWidth().padding(20.dp),
-          contentAlignment = Alignment.Center,
-        ) {
-          Text(
-            text = "Processing logs will appear here during translation.",
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      } else {
-        LazyColumn(
-          state = logListState,
-          modifier = Modifier.fillMaxWidth().padding(12.dp),
-          verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          items(items = sessionState.logs, key = { it.id }) { log ->
-            LogLineRow(log = log)
-          }
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun LogLineRow(log: ProcessingLogEntry) {
-  val accentColor =
-    when (log.level) {
-      LogLevel.SUCCESS -> MaterialTheme.colorScheme.tertiary
-      LogLevel.WARNING -> MaterialTheme.colorScheme.secondary
-      LogLevel.ERROR -> MaterialTheme.colorScheme.error
-      LogLevel.COOLDOWN -> MaterialTheme.colorScheme.secondary
-      LogLevel.INFO -> MaterialTheme.colorScheme.onSurface
-    }
-
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.Top,
-  ) {
-    Text(
-      text = "[${log.timestampLabel}]",
-      style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Spacer(modifier = Modifier.width(6.dp))
-    Text(
-      text = log.message,
-      style = MaterialTheme.typography.labelSmall,
-      color = accentColor,
-      modifier = Modifier.weight(1f),
-    )
   }
 }

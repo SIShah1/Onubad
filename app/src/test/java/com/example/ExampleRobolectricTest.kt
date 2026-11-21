@@ -29,6 +29,13 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import androidx.work.workDataOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import com.example.data.preferences.SecureKeyStorage
+import com.example.data.storage.SubtitleFileStorage
+import com.example.srt.SrtFileParser
+import com.example.domain.model.TranslationStatus
 import com.example.data.local.BSubDatabase
 import com.example.data.local.FileTranslationProgress
 import com.example.data.local.HistoryRepository
@@ -67,6 +74,7 @@ import com.example.logging.WorkManagerDiagnosticTree
 import com.example.service.SubtitleTranslationService
 import com.example.service.SubtitleTranslationServiceResult
 import com.example.ui.screens.StudioScreen
+import com.example.ui.screens.SubtitlePreviewScreen
 import com.example.ui.screens.fitHeroTitleFontSizeSp
 import com.example.ui.theme.BSubTranslatorTheme
 import com.example.ui.theme.CloverCoralTint
@@ -78,7 +86,10 @@ import com.example.ui.theme.LightCanvas
 import com.example.ui.theme.LocalThemeController
 import com.example.ui.theme.StudioMidnight
 import com.example.ui.theme.ThemeProvider
+import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.StudioFormState
+import com.example.ui.viewmodel.SubtitleCuePair
+import com.example.ui.viewmodel.SubtitlePreviewState
 import com.example.worker.SubtitleTranslationWorker
 import com.example.worker.TranslationWorkScheduler
 import kotlinx.coroutines.flow.first
@@ -1224,6 +1235,28 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `history screen empty state renders custom empty archive illustration and headline`() {
+    val emptyDrawable = ContextCompat.getDrawable(app, R.drawable.img_history_empty_state)
+    assertTrue("Expected img_history_empty_state drawable to exist", emptyDrawable != null)
+
+    composeTestRule.setContent {
+      BSubTranslatorTheme {
+        HistoryScreen(
+          historyItems = emptyList(),
+          onOpenPreview = {},
+          onReSaveToDownloads = {},
+          onExportToUri = { _, _ -> },
+          onCreateShareIntent = { null },
+          onDeleteItem = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("history_empty_image").assertIsDisplayed()
+    composeTestRule.onNodeWithText("No Translated Files Yet").assertIsDisplayed()
+  }
+
+  @Test
   fun `gemini key rotation interceptor rotates through keys on 429 and 401 via retrofit`() =
     runBlocking {
       app.secureKeyStorage.clearAllKeys()
@@ -1402,4 +1435,607 @@ class ExampleRobolectricTest {
       assertEquals(WorkInfo.State.ENQUEUED, info?.state)
       assertTrue(info?.tags?.contains(TranslationWorkScheduler.TAG_SUBTITLE_TRANSLATION) == true)
     }
+
+  @Test
+  fun `studio screen displays file queue badges workmanager multi-file dashboard and inline bulk key import`() {
+    val file1 =
+      SelectedSubtitleFile(
+        id = "f1",
+        uriString = "content://subtitles/ep01.srt",
+        fileName = "ep01.srt",
+        fileSizeBytes = 1024L,
+        totalBlocks = 10,
+        totalLines = 15,
+        blocks = listOf(SrtBlock(1, "00:00:01,000 --> 00:00:02,000", listOf("Hello"))),
+      )
+    val file2 =
+      SelectedSubtitleFile(
+        id = "f2",
+        uriString = "content://subtitles/ep02.srt",
+        fileName = "ep02.srt",
+        fileSizeBytes = 2048L,
+        totalBlocks = 10,
+        totalLines = 18,
+        blocks = listOf(SrtBlock(1, "00:00:01,000 --> 00:00:02,000", listOf("World"))),
+      )
+    val file3 =
+      SelectedSubtitleFile(
+        id = "f3",
+        uriString = "content://subtitles/ep03.srt",
+        fileName = "ep03.srt",
+        fileSizeBytes = 1536L,
+        totalBlocks = 10,
+        totalLines = 14,
+        blocks = listOf(SrtBlock(1, "00:00:01,000 --> 00:00:02,000", listOf("End"))),
+      )
+
+    var importedBulkPayload = ""
+
+    composeTestRule.setContent {
+      BSubTranslatorTheme {
+        StudioScreen(
+          formState =
+            StudioFormState(
+              inputMode = InputMode.SERIES,
+              seriesName = "Andor",
+              season = "S02",
+              seriesFiles = listOf(file1, file2, file3),
+            ),
+          settings = AppSettings(),
+          apiKeys = emptyList(),
+          sessionState =
+            TranslationSessionState(
+              status = TranslationStatus.RUNNING,
+              totalFiles = 3,
+              completedFiles = 1,
+              currentFileIndex = 2,
+              currentFileName = "ep02.srt",
+              totalBlocksAllFiles = 30,
+              completedBlocksAllFiles = 15,
+            ),
+          roomProgress =
+            RoomTranslationProgress(
+              totalBlocks = 30,
+              translatedBlocks = 15,
+              pendingBlocks = 15,
+              activeFileName = "ep02.srt",
+            ),
+          fileProgressList =
+            listOf(
+              FileTranslationProgress("job_1", "ep01.srt", 10, 10, 0),
+              FileTranslationProgress("job_2", "ep02.srt", 10, 5, 5),
+              FileTranslationProgress("job_3", "ep03.srt", 10, 0, 10),
+            ),
+          onInputModeChange = {},
+          onMovieNameChange = {},
+          onReleaseYearChange = {},
+          onSeriesNameChange = {},
+          onSeasonChange = {},
+          onSingleSrtPicked = {},
+          onMultipleSrtPicked = {},
+          onRemoveFile = {},
+          onMoveSeriesFile = { _, _ -> },
+          onClearFiles = {},
+          onStartTranslation = {},
+          onAbortTranslation = {},
+          onClearLogs = {},
+          onImportBulkKeys = { importedBulkPayload = it },
+          onImportKeysFile = {},
+          onNavigateToKeys = {},
+        )
+      }
+    }
+
+    composeTestRule.waitForIdle()
+
+    // 1. Visual status indicators and badges on file list items
+    composeTestRule.onNodeWithTag("file_status_indicator_0").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("file_status_badge_0").assertTextEquals("Completed")
+    composeTestRule.onNodeWithTag("file_status_indicator_1").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("file_status_badge_1").assertTextEquals("In Progress")
+    composeTestRule.onNodeWithTag("file_status_indicator_2").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("file_status_badge_2").assertTextEquals("Pending")
+
+    // 3. Bulk key import card in StudioScreen
+    composeTestRule.onNodeWithTag("studio_bulk_keys_card").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("studio_import_keys_file_button").performScrollTo().assertIsDisplayed()
+
+    // 4. Multi-file WorkManager progress dashboard
+    composeTestRule.onNodeWithTag("workmanager_file_dashboard").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("dashboard_file_row_0").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("dashboard_file_row_1").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("dashboard_file_row_2").performScrollTo().assertIsDisplayed()
+    assertEquals("", importedBulkPayload)
+  }
+
+  @Test
+  fun `studio screen manual bulk key input and file storage read helpers work for multi-key rotation`() =
+    runBlocking {
+      var capturedBulk = ""
+      composeTestRule.setContent {
+        BSubTranslatorTheme {
+          StudioScreen(
+            formState = StudioFormState(),
+            settings = AppSettings(),
+            apiKeys = emptyList(),
+            sessionState = TranslationSessionState(status = TranslationStatus.IDLE),
+            onInputModeChange = {},
+            onMovieNameChange = {},
+            onReleaseYearChange = {},
+            onSeriesNameChange = {},
+            onSeasonChange = {},
+            onSingleSrtPicked = {},
+            onMultipleSrtPicked = {},
+            onRemoveFile = {},
+            onMoveSeriesFile = { _, _ -> },
+            onClearFiles = {},
+            onStartTranslation = {},
+            onAbortTranslation = {},
+            onClearLogs = {},
+            onImportBulkKeys = { capturedBulk = it },
+            onImportKeysFile = {},
+            onNavigateToKeys = {},
+          )
+        }
+      }
+
+      val keyInput = "GEMINI_1=AIzaSyBulkAlphaKey123456\nAIzaSyBulkBravoKey123456"
+      composeTestRule.onNodeWithTag("studio_bulk_keys_input").performScrollTo().performTextInput(keyInput)
+      composeTestRule.onNodeWithTag("studio_bulk_keys_detected_count").assertTextContains("2 key(s) detected", substring = true)
+      composeTestRule.onNodeWithTag("studio_save_bulk_keys_button").performScrollTo().performClick()
+      assertEquals(keyInput, capturedBulk)
+
+      // 2 & 5. File storage URI read + SrtFileParser class structured parsing from text file
+      val tempSrt = java.io.File(app.cacheDir, "picker_sample.srt")
+      tempSrt.writeText(
+        "\uFEFF1\r\n00:00:01,000 --> 00:00:03,500\r\nFirst line\r\nSecond line\r\n\r\n2\r\n00:00:04,000 --> 00:00:06,000\r\nThird line\r\n",
+        Charsets.UTF_8,
+      )
+      val fileParser = SrtFileParser()
+      val document = fileParser.parseDocument(tempSrt)
+      assertTrue(document.isValid)
+      assertEquals(2, document.totalBlocks)
+      assertEquals(3, document.totalLines)
+      assertEquals("First line\nSecond line", document.items[0].content)
+      assertEquals("00:00:04,000 --> 00:00:06,000", document.blocks[1].timestamp)
+
+      val analyzedFromUri = app.subtitleFileStorage.readAndAnalyzeUri(android.net.Uri.fromFile(tempSrt))
+      assertEquals("picker_sample.srt", analyzedFromUri?.fileName)
+      assertEquals(2, analyzedFromUri?.totalBlocks)
+      assertTrue(SubtitleFileStorage.SRT_PICKER_MIME_TYPES.contains("application/x-subrip"))
+      assertEquals(2, SecureKeyStorage.parseBulkKeys(keyInput).size)
+      assertTrue(tempSrt.delete())
+    }
+
+  @Test
+  fun `tapping processed file in studio or history opens side-by-side english and bengali preview screen`() {
+    val fileDone =
+      SelectedSubtitleFile(
+        id = "done1",
+        uriString = "content://subtitles/dune_ep01.srt",
+        fileName = "dune_ep01.srt",
+        fileSizeBytes = 1024L,
+        totalBlocks = 2,
+        totalLines = 2,
+        blocks =
+          listOf(
+            SrtBlock(1, "00:00:01,000 --> 00:00:03,000", listOf("Dreams are messages from the deep.")),
+            SrtBlock(2, "00:00:04,000 --> 00:00:06,500", listOf("The mystery of life isn't a problem to solve.")),
+          ),
+      )
+    val filePending =
+      SelectedSubtitleFile(
+        id = "pend1",
+        uriString = "content://subtitles/dune_ep02.srt",
+        fileName = "dune_ep02.srt",
+        fileSizeBytes = 512L,
+        totalBlocks = 2,
+        totalLines = 2,
+        blocks = listOf(SrtBlock(1, "00:00:01,000 --> 00:00:02,000", listOf("Pending line"))),
+      )
+
+    var previewedStudioFile: String? = null
+    var openedHistoryItem: TranslationHistoryEntity? = null
+    var closedPreview = false
+
+    val sampleHistory =
+      TranslationHistoryEntity(
+        id = 10L,
+        originalFileName = "dune_ep01.srt",
+        outputFileName = "dune_ep01_BSub.srt",
+        savedPath = "Downloads/BSub Translator/dune_ep01_BSub.srt",
+        localBackupPath = "/tmp/dune_ep01_bsub.srt",
+        mode = "MOVIE",
+        titleMetadata = "Dune (2021)",
+        totalBlocks = 2,
+        translatedBlocks = 2,
+        totalLines = 2,
+        fileSizeBytes = 2048L,
+        modelUsed = "gemini-2.5-flash",
+        status = "Completed",
+        translationStatus = HistoryTranslationStatus.COMPLETED,
+      )
+
+    val previewSampleState =
+      SubtitlePreviewState(
+        fileName = "dune_ep01_BSub.srt",
+        sourceFileName = "dune_ep01.srt",
+        subtitleMeta = "Dune (2021) • MOVIE",
+        hasOriginalText = true,
+        historyItem = sampleHistory,
+        cues =
+          listOf(
+            SubtitleCuePair(
+              index = 1,
+              timestamp = "00:00:01,000 --> 00:00:03,000",
+              englishText = "Dreams are messages from the deep.",
+              bengaliText = "স্বপ্ন হলো গভীরের বার্তা।",
+              isTranslated = true,
+            ),
+            SubtitleCuePair(
+              index = 2,
+              timestamp = "00:00:04,000 --> 00:00:06,500",
+              englishText = "The mystery of life isn't a problem to solve.",
+              bengaliText = "জীবনের রহস্য সমাধানের কোনো সমস্যা নয়।",
+              isTranslated = true,
+            ),
+          ),
+      )
+
+    var activeMode by mutableStateOf("studio")
+
+    composeTestRule.setContent {
+      BSubTranslatorTheme {
+        when (activeMode) {
+          "studio" ->
+            StudioScreen(
+              formState =
+                StudioFormState(
+                  inputMode = InputMode.SERIES,
+                  seriesName = "Dune",
+                  season = "S01",
+                  seriesFiles = listOf(fileDone, filePending),
+                ),
+              settings = AppSettings(),
+              apiKeys = emptyList(),
+              sessionState =
+                TranslationSessionState(
+                  status = TranslationStatus.RUNNING,
+                  totalFiles = 2,
+                  completedFiles = 1,
+                  currentFileIndex = 2,
+                  currentFileName = "dune_ep02.srt",
+                ),
+              fileProgressList =
+                listOf(
+                  FileTranslationProgress("j1", "dune_ep01.srt", 2, 2, 0),
+                  FileTranslationProgress("j2", "dune_ep02.srt", 2, 0, 2),
+                ),
+              onInputModeChange = {},
+              onMovieNameChange = {},
+              onReleaseYearChange = {},
+              onSeriesNameChange = {},
+              onSeasonChange = {},
+              onSingleSrtPicked = {},
+              onMultipleSrtPicked = {},
+              onRemoveFile = {},
+              onMoveSeriesFile = { _, _ -> },
+              onClearFiles = {},
+              onStartTranslation = {},
+              onAbortTranslation = {},
+              onClearLogs = {},
+              onPreviewFile = { name, _ ->
+                previewedStudioFile = name
+                activeMode = "preview"
+              },
+              onNavigateToKeys = {},
+            )
+          "history" ->
+            HistoryScreen(
+              historyItems = listOf(sampleHistory),
+              onOpenPreview = { item ->
+                openedHistoryItem = item
+                activeMode = "preview"
+              },
+              onReSaveToDownloads = {},
+              onExportToUri = { _, _ -> },
+              onCreateShareIntent = { null },
+              onDeleteItem = {},
+            )
+          else ->
+            SubtitlePreviewScreen(
+              state = previewSampleState,
+              onClose = { closedPreview = true },
+            )
+        }
+      }
+    }
+
+    composeTestRule.waitForIdle()
+    // Pending row should not trigger preview on tap
+    composeTestRule.onNodeWithTag("file_queue_item_1").performScrollTo().performClick()
+    assertEquals(null, previewedStudioFile)
+
+    // Processed row triggers preview
+    composeTestRule.onNodeWithTag("file_queue_item_0").performScrollTo().performClick()
+    assertEquals("dune_ep01.srt", previewedStudioFile)
+    composeTestRule.waitForIdle()
+
+    // Verify side-by-side preview headers & cue columns are left (English) vs right (Bengali)
+    composeTestRule.onNodeWithTag("subtitle_preview_screen").assertIsDisplayed()
+    val engHeaderBounds =
+      composeTestRule.onNodeWithTag("preview_header_english").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val benHeaderBounds =
+      composeTestRule.onNodeWithTag("preview_header_bengali").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected English column left of Bengali column",
+      engHeaderBounds.left < benHeaderBounds.left && engHeaderBounds.right <= benHeaderBounds.left + 4f,
+    )
+
+    val engCue1Bounds =
+      composeTestRule.onNodeWithTag("preview_english_text_1").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val benCue1Bounds =
+      composeTestRule.onNodeWithTag("preview_bengali_text_1").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    assertTrue("Expected cue #1 English text left of Bengali text", engCue1Bounds.left < benCue1Bounds.left)
+    composeTestRule.onNodeWithTag("preview_english_text_1").assertTextContains("Dreams are messages from the deep.", substring = true)
+    composeTestRule.onNodeWithTag("preview_bengali_text_1").assertTextContains("স্বপ্ন হলো গভীরের বার্তা।", substring = true)
+    composeTestRule.onNodeWithTag("preview_cue_row_2").assertIsDisplayed()
+
+    // Search filters cue list
+    composeTestRule.onNodeWithTag("preview_search_input").performTextInput("mystery")
+    composeTestRule.onNodeWithTag("preview_cue_row_2").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("preview_cue_row_1").assertDoesNotExist()
+
+    // Back button closes preview
+    composeTestRule.onNodeWithTag("preview_back_button").performClick()
+    assertTrue(closedPreview)
+
+    // Switch to HistoryScreen and verify tapping processed history card triggers onOpenPreview
+    activeMode = "history"
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("history_item_card_10").performClick()
+    assertEquals(10L, openedHistoryItem?.id)
+  }
+
+  @Test
+  fun `viewmodel pairs archived original english srt and translated bengali srt side-by-side after room cleared`() =
+    runBlocking {
+      app.subtitleTranslationRepository.clearAll()
+      val originalBlocks =
+        listOf(
+          SrtBlock(1, "00:00:01,000 --> 00:00:02,500", listOf("Hello friend")),
+          SrtBlock(2, "00:00:03,000 --> 00:00:05,000", listOf("See you tomorrow")),
+        )
+      val translatedSrt =
+        """
+        1
+        00:00:01,000 --> 00:00:02,500
+        হ্যালো বন্ধু
+
+        2
+        00:00:03,000 --> 00:00:05,000
+        আগামীকাল দেখা হবে
+        """.trimIndent()
+
+      val saved = app.subtitleFileStorage.saveTranslatedSrt("sample_pair_BSub.srt", translatedSrt)
+      app.subtitleFileStorage.saveOriginalSourceBackup(
+        translatedLocalBackupPath = saved.localBackupPath,
+        originalFileName = "sample_pair.srt",
+        blocks = originalBlocks,
+      )
+
+      val historyItem =
+        TranslationHistoryEntity(
+          id = 77L,
+          originalFileName = "sample_pair.srt",
+          outputFileName = saved.outputFileName,
+          savedPath = saved.displayPath,
+          contentUri = saved.contentUri,
+          localBackupPath = saved.localBackupPath,
+          mode = InputMode.MOVIE.name,
+          titleMetadata = "Sample Movie",
+          totalBlocks = 2,
+          translatedBlocks = 2,
+          totalLines = 2,
+          fileSizeBytes = saved.fileSizeBytes,
+          modelUsed = "gemini-2.5-flash",
+          status = HistoryTranslationStatus.COMPLETED.label,
+          translationStatus = HistoryTranslationStatus.COMPLETED,
+        )
+
+      val viewModel = MainViewModel(app)
+      viewModel.openHistoryPreview(historyItem)
+
+      val deadline = System.currentTimeMillis() + 5000L
+      while (System.currentTimeMillis() < deadline) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        val current = viewModel.previewState.value
+        if (current != null && !current.isLoading && current.cues.isNotEmpty()) break
+        Thread.sleep(25L)
+      }
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+      val loaded = viewModel.previewState.value!!
+      assertFalse(loaded.isLoading)
+      assertTrue(loaded.hasOriginalText)
+      assertEquals(2, loaded.cues.size)
+      assertEquals("Hello friend", loaded.cues[0].englishText)
+      assertEquals("হ্যালো বন্ধু", loaded.cues[0].bengaliText)
+      assertEquals("See you tomorrow", loaded.cues[1].englishText)
+      assertEquals("আগামীকাল দেখা হবে", loaded.cues[1].bengaliText)
+
+      viewModel.closeHistoryPreview()
+      assertEquals(null, viewModel.previewState.value)
+      app.subtitleFileStorage.deleteSavedFiles(saved.localBackupPath)
+    }
+
+  @Test
+  @Config(sdk = [36], qualifiers = "w440dp-h900dp")
+  fun `history search bar filters translated srt records by filename and subtitle content`() {
+    val (savedInterstellar, savedAndor) =
+      runBlocking {
+        val s1 =
+          app.subtitleFileStorage.saveTranslatedSrt(
+            "Interstellar_BSub.srt",
+            "1\n00:00:01,000 --> 00:00:03,000\nমহাকাশে ভালোবাসা সময় অতিক্রম করে।\n",
+          )
+        app.subtitleFileStorage.saveOriginalSourceBackup(
+          translatedLocalBackupPath = s1.localBackupPath,
+          originalFileName = "Interstellar.2014.srt",
+          blocks = listOf(SrtBlock(1, "00:00:01,000 --> 00:00:03,000", listOf("Love transcends time and space."))),
+        )
+
+        val s2 =
+          app.subtitleFileStorage.saveTranslatedSrt(
+            "Andor_S01E01_BSub.srt",
+            "1\n00:00:02,000 --> 00:00:04,000\nবিদ্রোহ আজ শুরু হচ্ছে।\n",
+          )
+        app.subtitleFileStorage.saveOriginalSourceBackup(
+          translatedLocalBackupPath = s2.localBackupPath,
+          originalFileName = "Andor.S01E01.srt",
+          blocks = listOf(SrtBlock(1, "00:00:02,000 --> 00:00:04,000", listOf("The rebellion begins today."))),
+        )
+        s1 to s2
+      }
+
+    val item1 =
+      TranslationHistoryEntity(
+        id = 101L,
+        originalFileName = "Interstellar.2014.srt",
+        outputFileName = savedInterstellar.outputFileName,
+        savedPath = savedInterstellar.displayPath,
+        contentUri = savedInterstellar.contentUri,
+        localBackupPath = savedInterstellar.localBackupPath,
+        mode = InputMode.MOVIE.name,
+        titleMetadata = "Interstellar (2014)",
+        totalBlocks = 1,
+        translatedBlocks = 1,
+        totalLines = 1,
+        fileSizeBytes = savedInterstellar.fileSizeBytes,
+        modelUsed = "gemini-2.5-flash",
+        status = HistoryTranslationStatus.COMPLETED.label,
+        translationStatus = HistoryTranslationStatus.COMPLETED,
+      )
+    val item2 =
+      TranslationHistoryEntity(
+        id = 102L,
+        originalFileName = "Andor.S01E01.srt",
+        outputFileName = savedAndor.outputFileName,
+        savedPath = savedAndor.displayPath,
+        contentUri = savedAndor.contentUri,
+        localBackupPath = savedAndor.localBackupPath,
+        mode = InputMode.SERIES.name,
+        titleMetadata = "Andor • S01",
+        totalBlocks = 1,
+        translatedBlocks = 1,
+        totalLines = 1,
+        fileSizeBytes = savedAndor.fileSizeBytes,
+        modelUsed = "gemini-2.5-flash",
+        status = HistoryTranslationStatus.COMPLETED.label,
+        translationStatus = HistoryTranslationStatus.COMPLETED,
+      )
+
+    try {
+      composeTestRule.setContent {
+        BSubTranslatorTheme {
+          HistoryScreen(
+            historyItems = listOf(item1, item2),
+            onOpenPreview = {},
+            onReSaveToDownloads = {},
+            onExportToUri = { _, _ -> },
+            onCreateShareIntent = { null },
+            onDeleteItem = {},
+          )
+        }
+      }
+
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("history_search_input").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Interstellar.2014.srt").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Andor.S01E01.srt").assertIsDisplayed()
+
+      // 1. Filter by filename
+      composeTestRule.onNodeWithTag("history_search_input").performTextReplacement("Andor")
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithText("Source: Andor.S01E01.srt").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Interstellar.2014.srt").assertDoesNotExist()
+
+      // Clear search restores both items
+      composeTestRule.onNodeWithTag("history_search_clear").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithText("Source: Interstellar.2014.srt").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Andor.S01E01.srt").assertIsDisplayed()
+
+      runBlocking {
+        assertEquals(
+          "মহাকাশে ভালোবাসা সময় অতিক্রম করে।",
+          app.subtitleFileStorage.findContentMatchSnippet(
+            savedInterstellar.localBackupPath,
+            savedInterstellar.contentUri,
+            "Interstellar.2014.srt",
+            "ভালোবাসা",
+          ),
+        )
+        assertEquals(
+          "The rebellion begins today.",
+          app.subtitleFileStorage.findContentMatchSnippet(
+            savedAndor.localBackupPath,
+            savedAndor.contentUri,
+            "Andor.S01E01.srt",
+            "rebellion",
+          ),
+        )
+      }
+
+      // 2. Filter by translated Bengali subtitle content
+      composeTestRule.onNodeWithTag("history_search_input").performTextReplacement("ভালোবাসা")
+      composeTestRule.waitUntil(timeoutMillis = 5000L) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.mainClock.advanceTimeByFrame()
+        try {
+          composeTestRule
+            .onNodeWithTag("history_content_match_101", useUnmergedTree = true)
+            .assertIsDisplayed()
+          true
+        } catch (_: AssertionError) {
+          false
+        }
+      }
+      composeTestRule.onNodeWithText("Match: \"মহাকাশে ভালোবাসা সময় অতিক্রম করে।\"", substring = true).assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Interstellar.2014.srt").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Andor.S01E01.srt").assertDoesNotExist()
+
+      // 3. Filter by archived original English subtitle content
+      composeTestRule.onNodeWithTag("history_search_clear").performClick()
+      composeTestRule.onNodeWithTag("history_search_input").performTextReplacement("rebellion")
+      composeTestRule.waitUntil(timeoutMillis = 5000L) {
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.mainClock.advanceTimeByFrame()
+        try {
+          composeTestRule
+            .onNodeWithTag("history_content_match_102", useUnmergedTree = true)
+            .assertIsDisplayed()
+          true
+        } catch (_: AssertionError) {
+          false
+        }
+      }
+      composeTestRule.onNodeWithText("Match: \"The rebellion begins today.\"", substring = true).assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Andor.S01E01.srt").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Interstellar.2014.srt").assertDoesNotExist()
+
+      // 4. Unmatched query shows empty state + reset button
+      composeTestRule.onNodeWithTag("history_search_clear").performClick()
+      composeTestRule.onNodeWithTag("history_search_input").performTextReplacement("nonexistent_phrase_xyz")
+      composeTestRule.onNodeWithText("No Matching Translated Files").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("history_reset_filters_button").performClick()
+      composeTestRule.onNodeWithText("Source: Interstellar.2014.srt").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Source: Andor.S01E01.srt").assertIsDisplayed()
+    } finally {
+      runBlocking {
+        app.subtitleFileStorage.deleteSavedFiles(savedInterstellar.localBackupPath)
+        app.subtitleFileStorage.deleteSavedFiles(savedAndor.localBackupPath)
+      }
+    }
+  }
 }

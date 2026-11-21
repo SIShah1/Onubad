@@ -1,9 +1,13 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -40,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -55,6 +60,7 @@ import com.example.ui.screens.FirstLaunchPromptDialog
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.StudioScreen
+import com.example.ui.screens.SubtitlePreviewScreen
 import com.example.ui.theme.ThemeProvider
 import com.example.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.flow.collectLatest
@@ -126,7 +132,10 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
   val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
   val roomProgress by viewModel.roomTranslationProgress.collectAsStateWithLifecycle()
   val fileProgressList by viewModel.fileTranslationProgressList.collectAsStateWithLifecycle()
+  val backgroundWorkInfos by viewModel.backgroundWorkInfos.collectAsStateWithLifecycle()
   val historyItems by viewModel.historyItems.collectAsStateWithLifecycle()
+  val historySearchQuery by viewModel.historySearchQuery.collectAsStateWithLifecycle()
+  val historyContentSnippets by viewModel.historyContentSnippets.collectAsStateWithLifecycle()
   val previewState by viewModel.previewState.collectAsStateWithLifecycle()
 
   val navController = rememberNavController()
@@ -154,6 +163,8 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
       restoreState = true
     }
   }
+
+  val context = LocalContext.current
 
   BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
     val useNavigationRail = maxWidth >= 600.dp
@@ -241,6 +252,7 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
                 sessionState = sessionState,
                 roomProgress = roomProgress,
                 fileProgressList = fileProgressList,
+                workInfos = backgroundWorkInfos,
                 onInputModeChange = viewModel::setInputMode,
                 onMovieNameChange = viewModel::updateMovieName,
                 onReleaseYearChange = viewModel::updateReleaseYear,
@@ -254,6 +266,9 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
                 onStartTranslation = { viewModel.startTranslation() },
                 onAbortTranslation = viewModel::abortTranslation,
                 onClearLogs = viewModel::clearProcessingLogs,
+                onImportBulkKeys = viewModel::saveBulkApiKeys,
+                onImportKeysFile = viewModel::importApiKeysFromUri,
+                onPreviewFile = viewModel::openStudioFilePreview,
                 onNavigateToKeys = { navigateToTab(AppDestination.KEYS.route) },
               )
             }
@@ -274,13 +289,16 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
             composable(AppDestination.HISTORY.route) {
               HistoryScreen(
                 historyItems = historyItems,
-                previewState = previewState,
+                previewState = null,
                 onOpenPreview = viewModel::openHistoryPreview,
                 onClosePreview = viewModel::closeHistoryPreview,
                 onReSaveToDownloads = viewModel::reSaveToDownloads,
                 onExportToUri = viewModel::exportHistoryItemToUri,
                 onCreateShareIntent = viewModel::createShareIntent,
                 onDeleteItem = viewModel::deleteHistoryItem,
+                searchQuery = historySearchQuery,
+                onSearchQueryChange = viewModel::updateHistorySearchQuery,
+                matchedContentSnippets = historyContentSnippets,
               )
             }
 
@@ -292,6 +310,24 @@ private fun BSubAppRoot(viewModel: MainViewModel) {
             }
           }
         }
+      }
+    }
+
+    AnimatedVisibility(
+      visible = previewState != null,
+      enter = fadeIn(),
+      exit = fadeOut(),
+    ) {
+      previewState?.let { activePreview ->
+        SubtitlePreviewScreen(
+          state = activePreview,
+          onClose = viewModel::closeHistoryPreview,
+          onShare = { item ->
+            viewModel.createShareIntent(item)?.let { shareIntent ->
+              context.startActivity(Intent.createChooser(shareIntent, "Share Translated Subtitle"))
+            }
+          },
+        )
       }
     }
   }
